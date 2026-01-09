@@ -60,9 +60,6 @@ async def on_shutdown(bot: Bot):
     """Действия при остановке бота"""
     logger.info("Бот остановлен")
     
-    # Закрытие соединений с БД
-    # await close_db_connections()
-    
     # Отправка уведомления админам
     for admin_id in settings.ADMIN_IDS:
         try:
@@ -84,6 +81,14 @@ async def main():
         password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None,
         decode_responses=True
     )
+    
+    # Проверка подключения к Redis
+    try:
+        await redis.ping()
+        logger.info("Redis подключен")
+    except Exception as e:
+        logger.error(f"Ошибка подключения к Redis: {e}")
+        raise
     
     # Создание хранилища состояний
     storage = RedisStorage(redis=redis)
@@ -122,7 +127,8 @@ async def main():
         await dp.start_polling(
             bot,
             allowed_updates=dp.resolve_used_update_types(),
-            drop_pending_updates=True
+            drop_pending_updates=True,
+            polling_timeout=10
         )
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {e}")
