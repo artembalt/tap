@@ -2,6 +2,7 @@
 """Обработчики старта и профиля продавца"""
 
 import logging
+import time
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart, Command, CommandObject
@@ -17,15 +18,30 @@ from bot.database.models import User, Ad, AdStatus
 router = Router(name='start')
 logger = logging.getLogger(__name__)
 
+# Защита от дублирования /start (user_id -> timestamp)
+_start_timestamps = {}
+START_DEBOUNCE_SECONDS = 3  # Игнорировать повторные /start в течение 3 секунд
+
+
+def _should_process_start(user_id: int) -> bool:
+    """Проверяет, нужно ли обрабатывать /start (защита от дублей)"""
+    now = time.time()
+    last_start = _start_timestamps.get(user_id, 0)
+    
+    if now - last_start < START_DEBOUNCE_SECONDS:
+        logger.info(f"Игнорируем дублирующий /start от {user_id}")
+        return False
+    
+    _start_timestamps[user_id] = now
+    return True
+
 
 @router.message(CommandStart(deep_link=True))
 async def cmd_start_with_args(message: Message, command: CommandObject, state: FSMContext):
     """Обработка /start с параметрами (deep link)"""
-    await state.clear()
-    
     args = command.args
     
-    # Обработка профиля продавца
+    # Обработка профиля продавца - всегда обрабатываем
     if args and args.startswith("profile_"):
         try:
             seller_id = int(args.replace("profile_", ""))
@@ -34,15 +50,29 @@ async def cmd_start_with_args(message: Message, command: CommandObject, state: F
         except ValueError:
             pass
     
-    # Обычный старт
-    await cmd_start(message, state)
+    # Для обычного /start - проверяем дебаунс
+    if not _should_process_start(message.from_user.id):
+        return
+    
+    # Очищаем состояние при любом /start
+    await state.clear()
+    await _send_welcome(message)
 
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     """Обработка команды /start"""
-    await state.clear()
+    # Проверяем дебаунс
+    if not _should_process_start(message.from_user.id):
+        return
     
+    # Очищаем состояние - это отменяет любые текущие операции
+    await state.clear()
+    await _send_welcome(message)
+
+
+async def _send_welcome(message: Message):
+    """Отправка приветственного сообщения"""
     # Получаем или создаем пользователя
     user = await UserQueries.get_or_create_user(
         telegram_id=message.from_user.id,

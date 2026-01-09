@@ -320,23 +320,37 @@ async def process_photo(message: Message, state: FSMContext):
         photos.append(photo_id)
         await state.update_data(photos=photos)
     
-    # Удаляем предыдущее сообщение со счётчиком
-    photo_counter_msg_id = data.get('photo_counter_msg_id')
-    if photo_counter_msg_id:
-        try:
-            await message.bot.delete_message(message.chat.id, photo_counter_msg_id)
-        except: pass
+    from bot.keyboards.inline import get_photo_done_keyboard
     
-    # Удаляем исходное сообщение с кнопкой "Пропустить"
+    # Получаем ID сообщения со счётчиком
+    photo_counter_msg_id = data.get('photo_counter_msg_id')
     photo_prompt_msg_id = data.get('photo_prompt_msg_id')
+    
+    # Удаляем исходное сообщение "Отправьте фото" с кнопкой "Пропустить" (один раз)
     if photo_prompt_msg_id:
         try:
             await message.bot.delete_message(message.chat.id, photo_prompt_msg_id)
-            await state.update_data(photo_prompt_msg_id=None)
         except: pass
+        await state.update_data(photo_prompt_msg_id=None)
     
-    from bot.keyboards.inline import get_photo_done_keyboard
-    msg = await message.answer(f"📸 Загружено {len(photos)}/10 фото", reply_markup=get_photo_done_keyboard())
+    new_text = f"📸 Загружено {len(photos)}/10 фото"
+    
+    # Если уже есть сообщение со счётчиком - редактируем его
+    if photo_counter_msg_id:
+        try:
+            await message.bot.edit_message_text(
+                text=new_text,
+                chat_id=message.chat.id,
+                message_id=photo_counter_msg_id,
+                reply_markup=get_photo_done_keyboard()
+            )
+            return  # Важно! Не создаём новое сообщение
+        except Exception as e:
+            # Если не удалось отредактировать - создадим новое
+            logger.warning(f"Не удалось отредактировать счётчик фото: {e}")
+    
+    # Создаём новое сообщение со счётчиком (только если нет существующего)
+    msg = await message.answer(new_text, reply_markup=get_photo_done_keyboard())
     await state.update_data(photo_counter_msg_id=msg.message_id)
 
 @router.callback_query(AdCreation.photos, F.data == "photos_skip")
