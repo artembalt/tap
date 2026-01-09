@@ -300,12 +300,29 @@ async def process_condition(callback: CallbackQuery, state: FSMContext):
     await ask_photos(callback.message, state)
     await callback.answer()
 
-# ========== ФОТО ==========
+# ========== ФОТО (с правильной обработкой медиагрупп) ==========
+import asyncio
+from typing import Dict
+
+# Глобальное хранилище для сбора медиагрупп
+media_group_data: Dict[str, dict] = {}
+
 async def ask_photos(message: Message, state: FSMContext):
     await state.set_state(AdCreation.photos)
-    await state.update_data(photos=[], photo_prompt_msg_id=None)
+    await state.update_data(
+        photos=[], 
+        photo_progress_msg_id=None,
+        processed_media_groups=[],
+        photo_prompt_msg_id=None
+    )
     from bot.keyboards.inline import get_photo_skip_keyboard
-    msg = await message.answer("📸 <b>Шаг 9: Фото</b>\n\nОтправьте фото (до 10 шт):", reply_markup=get_photo_skip_keyboard())
+    msg = await message.answer(
+        "📸 <b>Шаг 9: Фото</b>\n\n"
+        "Отправьте фото товара (до 10 шт).\n"
+        "Можно отправить сразу несколько или по одному.\n\n"
+        "Когда закончите — нажмите <b>Далее</b>.",
+        reply_markup=get_photo_skip_keyboard()
+    )
     data = await state.get_data()
     history = data.get('history_messages', [])
     history.append(msg.message_id)
@@ -313,45 +330,121 @@ async def ask_photos(message: Message, state: FSMContext):
 
 @router.message(AdCreation.photos, F.photo)
 async def process_photo(message: Message, state: FSMContext):
-    data = await state.get_data()
-    photos = data.get('photos', [])
-    photo_id = message.photo[-1].file_id
-    if photo_id not in photos and len(photos) < 10:
-        photos.append(photo_id)
-        await state.update_data(photos=photos)
+    """
+    Обработка фото с поддержкой медиагрупп.
+    Когда несколько фото отправляются сразу — они приходят как отдельные сообщения
+    с одним media_group_id. Собираем их и показываем ОДНО сообщение.
+    """
+    global media_group_data
     
+    data = await state.get_data()
+    photos = data.get("photos", [])
+    processed_groups = data.get("processed_media_groups", [])
+    
+    # Проверяем лимит
+    if len(photos) >= 10:
+        return
+    
+    photo_id = message.photo[-1].file_id
+    media_group_id = message.media_group_id
+    
+    if media_group_id:
+        # Это часть медиагруппы — собираем все фото
+        if media_group_id in processed_groups:
+            return
+        
+        if media_group_id not in media_group_data:
+            media_group_data[media_group_id] = {
+                "photos": [],
+                "chat_id": message.chat.id,
+                "user_id": message.from_user.id,
+                "state": state,
+                "message": message
+            }
+        
+        current_total = len(photos) + len(media_group_data[media_group_id]["photos"])
+        if photo_id not in media_group_data[media_group_id]["photos"] and current_total < 10:
+            media_group_data[media_group_id]["photos"].append(photo_id)
+        
+        # Запускаем отложенную обработку (ждём пока все фото придут)
+        asyncio.create_task(
+            process_media_group_delayed(media_group_id, message, state)
+        )
+    else:
+        # Одиночное фото — обрабатываем сразу
+        if photo_id not in photos:
+            photos.append(photo_id)
+            await state.update_data(photos=photos)
+            await show_photo_progress(message, state, len(photos))
+
+async def process_media_group_delayed(media_group_id: str, message: Message, state: FSMContext):
+    """Отложенная обработка медиагруппы — ждём 1 секунду чтобы собрать все фото."""
+    global media_group_data
+    
+    # Ждём пока все фото группы придут
+    await asyncio.sleep(1.0)
+    
+    if media_group_id not in media_group_data:
+        return
+    
+    group_data = media_group_data[media_group_id]
+    group_photos = group_data["photos"]
+    
+    data = await state.get_data()
+    photos = data.get("photos", [])
+    processed_groups = data.get("processed_media_groups", [])
+    
+    if media_group_id in processed_groups:
+        del media_group_data[media_group_id]
+        return
+    
+    # Добавляем фото из группы
+    added_count = 0
+    for photo_id in group_photos:
+        if len(photos) < 10 and photo_id not in photos:
+            photos.append(photo_id)
+            added_count += 1
+    
+    # Помечаем группу как обработанную
+    processed_groups.append(media_group_id)
+    await state.update_data(photos=photos, processed_media_groups=processed_groups)
+    
+    del media_group_data[media_group_id]
+    
+    # Показываем прогресс ОДИН раз после сбора всей группы
+    if added_count > 0:
+        await show_photo_progress(message, state, len(photos))
+
+async def show_photo_progress(message: Message, state: FSMContext, photo_count: int):
+    """Показать прогресс загрузки фото — ОДНО сообщение с кнопкой Далее."""
     from bot.keyboards.inline import get_photo_done_keyboard
     
-    # Получаем ID сообщения со счётчиком
-    photo_counter_msg_id = data.get('photo_counter_msg_id')
-    photo_prompt_msg_id = data.get('photo_prompt_msg_id')
+    data = await state.get_data()
     
-    # Удаляем исходное сообщение "Отправьте фото" с кнопкой "Пропустить" (один раз)
+    # Удаляем предыдущее сообщение о прогрессе
+    old_progress_msg_id = data.get('photo_progress_msg_id')
+    if old_progress_msg_id:
+        try:
+            await message.bot.delete_message(message.chat.id, old_progress_msg_id)
+        except: pass
+    
+    # Удаляем исходное сообщение "Отправьте фото" (только один раз)
+    photo_prompt_msg_id = data.get('photo_prompt_msg_id')
     if photo_prompt_msg_id:
         try:
             await message.bot.delete_message(message.chat.id, photo_prompt_msg_id)
         except: pass
         await state.update_data(photo_prompt_msg_id=None)
     
-    new_text = f"📸 Загружено {len(photos)}/10 фото"
+    # Текст сообщения
+    if photo_count >= 10:
+        text = f"✅ <b>Загружено {photo_count} из 10 фото.</b>\n\nНажмите <b>Далее</b>."
+    else:
+        text = f"✅ <b>Загружено {photo_count} из 10 фото.</b>\n\nДобавьте ещё или нажмите <b>Далее</b>."
     
-    # Если уже есть сообщение со счётчиком - редактируем его
-    if photo_counter_msg_id:
-        try:
-            await message.bot.edit_message_text(
-                text=new_text,
-                chat_id=message.chat.id,
-                message_id=photo_counter_msg_id,
-                reply_markup=get_photo_done_keyboard()
-            )
-            return  # Важно! Не создаём новое сообщение
-        except Exception as e:
-            # Если не удалось отредактировать - создадим новое
-            logger.warning(f"Не удалось отредактировать счётчик фото: {e}")
-    
-    # Создаём новое сообщение со счётчиком (только если нет существующего)
-    msg = await message.answer(new_text, reply_markup=get_photo_done_keyboard())
-    await state.update_data(photo_counter_msg_id=msg.message_id)
+    # Отправляем ОДНО сообщение с кнопкой
+    msg = await message.answer(text, reply_markup=get_photo_done_keyboard())
+    await state.update_data(photo_progress_msg_id=msg.message_id)
 
 @router.callback_query(AdCreation.photos, F.data == "photos_skip")
 async def skip_photos(callback: CallbackQuery, state: FSMContext):
@@ -366,7 +459,7 @@ async def photos_done(callback: CallbackQuery, state: FSMContext):
     except: pass
     data = await state.get_data()
     photos_count = len(data.get('photos', []))
-    await state.update_data(photo_counter_msg_id=None)
+    await state.update_data(photo_progress_msg_id=None)
     msg = await callback.message.answer(f"✅ <b>Фото:</b> {photos_count} шт.")
     history = data.get('history_messages', [])
     history.append(msg.message_id)

@@ -41,7 +41,7 @@ async def cmd_start_with_args(message: Message, command: CommandObject, state: F
     """Обработка /start с параметрами (deep link)"""
     args = command.args
     
-    # Обработка профиля продавца - всегда обрабатываем
+    # Обработка профиля продавца
     if args and args.startswith("profile_"):
         try:
             seller_id = int(args.replace("profile_", ""))
@@ -49,6 +49,15 @@ async def cmd_start_with_args(message: Message, command: CommandObject, state: F
             return
         except ValueError:
             pass
+    
+    # Обработка просмотра объявления
+    if args and args.startswith("ad_"):
+        try:
+            ad_id = args.replace("ad_", "")
+            await show_ad_detail(message, ad_id)
+            return
+        except Exception as e:
+            logger.error(f"Ошибка показа объявления: {e}")
     
     # Для обычного /start - проверяем дебаунс
     if not _should_process_start(message.from_user.id):
@@ -106,7 +115,7 @@ async def _send_welcome(message: Message):
 
 
 async def show_seller_profile(message: Message, seller_id: int):
-    """Показать профиль продавца"""
+    """Показать профиль продавца с просмотрами и кликабельными объявлениями"""
     try:
         async with get_db_session() as session:
             # Получаем данные продавца
@@ -120,7 +129,17 @@ async def show_seller_profile(message: Message, seller_id: int):
                 return
             
             # Увеличиваем счётчик просмотров профиля
-            # (если есть такое поле, иначе пропускаем)
+            # Проверяем есть ли profile_views в premium_features
+            premium = seller.premium_features or {}
+            profile_views = premium.get('profile_views', 0) + 1
+            
+            # Не считаем просмотр своего профиля
+            if message.from_user.id != seller_id:
+                premium['profile_views'] = profile_views
+                seller.premium_features = premium
+                await session.commit()
+            else:
+                profile_views = premium.get('profile_views', 0)
             
             # Получаем активные объявления
             active_ads_result = await session.execute(
@@ -151,12 +170,18 @@ async def show_seller_profile(message: Message, seller_id: int):
             # Дата регистрации
             reg_date = seller.created_at.strftime("%d.%m.%Y") if seller.created_at else "неизвестно"
             
-            # Формируем список объявлений
+            # Получаем username бота для ссылок
+            bot_info = await message.bot.get_me()
+            bot_username = bot_info.username
+            
+            # Формируем список объявлений с КЛИКАБЕЛЬНЫМИ ссылками
             ads_list = ""
             if active_ads:
                 for i, ad in enumerate(active_ads[:10], 1):
-                    title = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
-                    ads_list += f"  {i}. {title}\n"
+                    title = ad.title[:35] + "..." if len(ad.title) > 35 else ad.title
+                    # Ссылка на объявление через deep link
+                    ad_link = f"https://t.me/{bot_username}?start=ad_{ad.id}"
+                    ads_list += f"  {i}. <a href=\"{ad_link}\">{title}</a>\n"
             else:
                 ads_list = "  Нет активных объявлений\n"
             
@@ -166,6 +191,7 @@ async def show_seller_profile(message: Message, seller_id: int):
 👤 Имя: {seller_name}
 📱 Username: {username_text}
 📅 Регистрация: {reg_date}
+👁 Просмотров профиля: {profile_views}
 
 📊 <b>Статистика:</b>
 • Активных объявлений: {len(active_ads)}
@@ -176,7 +202,8 @@ async def show_seller_profile(message: Message, seller_id: int):
 
             await message.answer(
                 profile_text,
-                reply_markup=get_back_keyboard()
+                reply_markup=get_back_keyboard(),
+                disable_web_page_preview=True
             )
             
     except Exception as e:
@@ -214,3 +241,123 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext):
         reply_markup=get_main_menu_keyboard()
     )
     await callback.answer()
+
+
+async def show_ad_detail(message: Message, ad_id: str):
+    """Показать детали объявления"""
+    from aiogram.types import InputMediaPhoto
+    from shared.regions_config import (
+        REGIONS, CITIES, CATEGORIES, SUBCATEGORIES, 
+        DEAL_TYPES, CONDITION_TYPES, DELIVERY_TYPES
+    )
+    
+    try:
+        async with get_db_session() as session:
+            from sqlalchemy import select
+            import uuid
+            
+            # Пробуем преобразовать в UUID
+            try:
+                ad_uuid = uuid.UUID(ad_id)
+            except ValueError:
+                await message.answer("❌ Неверный формат ID объявления")
+                return
+            
+            result = await session.execute(
+                select(Ad).where(Ad.id == ad_uuid)
+            )
+            ad = result.scalar_one_or_none()
+            
+            if not ad:
+                await message.answer("❌ Объявление не найдено")
+                return
+            
+            if ad.status != AdStatus.ACTIVE.value:
+                await message.answer("❌ Объявление неактивно или удалено")
+                return
+            
+            # Получаем данные продавца
+            seller_result = await session.execute(
+                select(User).where(User.telegram_id == ad.user_id)
+            )
+            seller = seller_result.scalar_one_or_none()
+            
+            # Формируем текст объявления
+            region_name = REGIONS.get(ad.region, ad.region or "")
+            category_name = CATEGORIES.get(ad.category, ad.category or "")
+            
+            # Получаем доп. данные из premium_features
+            pf = ad.premium_features or {}
+            subcategory = pf.get('subcategory', '')
+            subcategory_name = SUBCATEGORIES.get(ad.category, {}).get(subcategory, subcategory)
+            condition = pf.get('condition', '')
+            condition_name = CONDITION_TYPES.get(condition, '')
+            delivery = pf.get('delivery', '')
+            delivery_name = DELIVERY_TYPES.get(delivery, '')
+            city = pf.get('city', '')
+            city_name = CITIES.get(ad.region, {}).get(city, city)
+            
+            deal_type_name = DEAL_TYPES.get(ad.ad_type, ad.ad_type or "")
+            
+            # Цена
+            if ad.price:
+                price_text = f"{int(ad.price):,} ₽".replace(",", " ")
+            else:
+                price_text = pf.get('price_text', 'Договорная')
+            
+            # Seller info
+            seller_name = "Продавец"
+            if seller:
+                seller_name = seller.first_name or "Продавец"
+            
+            # Получаем username бота
+            bot_info = await message.bot.get_me()
+            bot_username = bot_info.username
+            
+            text = f"""📢 <b>{ad.title}</b>
+
+📍 {region_name}{f' • {city_name}' if city_name else ''}
+📂 {category_name}{f' • {subcategory_name}' if subcategory_name else ''}
+🏷 {deal_type_name}{f' • {condition_name}' if condition_name else ''}
+
+{ad.description or ''}
+
+💰 <b>Цена:</b> {price_text}
+{f'🚚 <b>Доставка:</b> {delivery_name}' if delivery_name else ''}
+
+━━━━━━━━━━━━━━━━━━━
+😎 <a href="tg://user?id={ad.user_id}">Написать продавцу</a>
+👾 <a href="https://t.me/{bot_username}?start=profile_{ad.user_id}">Профиль продавца</a>
+📢 <a href="https://t.me/{bot_username}">Разместить объявление</a>
+"""
+            
+            photos = ad.photos or []
+            
+            if photos:
+                if len(photos) == 1:
+                    await message.answer_photo(
+                        photo=photos[0],
+                        caption=text,
+                        reply_markup=get_back_keyboard()
+                    )
+                else:
+                    # Медиагруппа
+                    media_group = [InputMediaPhoto(media=photos[0], caption=text)]
+                    for photo in photos[1:10]:
+                        media_group.append(InputMediaPhoto(media=photo))
+                    
+                    await message.answer_media_group(media=media_group)
+                    await message.answer(
+                        "👆 Объявление выше",
+                        reply_markup=get_back_keyboard()
+                    )
+            else:
+                await message.answer(
+                    text,
+                    reply_markup=get_back_keyboard(),
+                    disable_web_page_preview=True
+                )
+                
+    except Exception as e:
+        logger.error(f"Ошибка при показе объявления: {e}", exc_info=True)
+        await message.answer("❌ Ошибка при загрузке объявления")
