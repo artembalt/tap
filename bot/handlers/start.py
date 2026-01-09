@@ -40,20 +40,23 @@ def _should_process_start(user_id: int) -> bool:
 async def cmd_start_with_args(message: Message, command: CommandObject, state: FSMContext):
     """Обработка /start с параметрами (deep link)"""
     args = command.args
+    logger.info(f"Deep link получен: args={args}, user={message.from_user.id}")
     
     # Обработка профиля продавца
     if args and args.startswith("profile_"):
         try:
             seller_id = int(args.replace("profile_", ""))
+            logger.info(f"Показываем профиль продавца {seller_id}")
             await show_seller_profile(message, seller_id)
             return
         except ValueError:
-            pass
+            logger.error(f"Неверный формат seller_id: {args}")
     
     # Обработка просмотра объявления
     if args and args.startswith("ad_"):
         try:
             ad_id = args.replace("ad_", "")
+            logger.info(f"Показываем объявление {ad_id}")
             await show_ad_detail(message, ad_id)
             return
         except Exception as e:
@@ -116,6 +119,11 @@ async def _send_welcome(message: Message):
 
 async def show_seller_profile(message: Message, seller_id: int):
     """Показать профиль продавца с просмотрами и кликабельными объявлениями"""
+    import asyncio
+    from aiogram.exceptions import TelegramNetworkError
+    
+    logger.info(f"Показ профиля продавца: {seller_id}")
+    
     try:
         async with get_db_session() as session:
             # Получаем данные продавца
@@ -128,9 +136,6 @@ async def show_seller_profile(message: Message, seller_id: int):
                 await message.answer("❌ Продавец не найден")
                 return
             
-            # Счётчик просмотров хранится в отдельном поле или в Redis
-            # Пока просто считаем количество просмотров как сумму просмотров объявлений
-            
             # Получаем активные объявления
             active_ads_result = await session.execute(
                 select(Ad).where(
@@ -139,12 +144,6 @@ async def show_seller_profile(message: Message, seller_id: int):
                 ).order_by(Ad.created_at.desc())
             )
             active_ads = active_ads_result.scalars().all()
-            
-            # Считаем просмотры профиля как сумму просмотров всех объявлений
-            profile_views = 0
-            for ad in active_ads:
-                pf = ad.premium_features or {}
-                profile_views += pf.get('views', 0)
             
             # Получаем количество завершённых (архив + удалённые)
             completed_count_result = await session.execute(
@@ -195,15 +194,33 @@ async def show_seller_profile(message: Message, seller_id: int):
 📋 <b>Активные объявления:</b>
 {ads_list}"""
 
-            await message.answer(
-                profile_text,
-                reply_markup=get_back_keyboard(),
-                disable_web_page_preview=True
-            )
+            # Отправляем с retry при сетевых ошибках
+            for attempt in range(3):
+                try:
+                    await message.answer(
+                        profile_text,
+                        reply_markup=get_back_keyboard(),
+                        disable_web_page_preview=True
+                    )
+                    logger.info(f"Профиль {seller_id} показан успешно")
+                    return
+                except TelegramNetworkError as e:
+                    logger.warning(f"Сетевая ошибка при показе профиля (попытка {attempt + 1}/3): {e}")
+                    if attempt < 2:
+                        await asyncio.sleep(2)
+                    else:
+                        raise
             
     except Exception as e:
         logger.error(f"Ошибка при показе профиля: {e}", exc_info=True)
-        await message.answer("❌ Ошибка при загрузке профиля")
+        # Пробуем отправить ошибку тоже с retry
+        for attempt in range(2):
+            try:
+                await message.answer("❌ Ошибка при загрузке профиля. Попробуйте ещё раз.")
+                break
+            except:
+                if attempt < 1:
+                    await asyncio.sleep(1)
 
 
 @router.message(Command("help"))
