@@ -2,6 +2,7 @@
 """Обработчики создания объявлений - НОВОЕ: добавлен выбор города"""
 
 import logging
+import asyncio
 from datetime import datetime
 import uuid
 from aiogram import Router, F, Bot
@@ -38,12 +39,18 @@ class AdCreation(StatesGroup):
     delivery = State()
     confirm = State()
 
-async def send_with_retry(coro, max_retries=3, delay=1):
-    import asyncio
+async def send_with_retry(coro_func, max_retries=3, delay=1):
+    """
+    Выполняет coroutine с retry при ошибках сети.
+    ВАЖНО: передавать lambda/функцию, а не готовый coroutine!
+    Пример: await send_with_retry(lambda: bot.send_message(...))
+    """
     last_error = None
     for attempt in range(max_retries):
         try:
-            return await asyncio.wait_for(coro, timeout=30)  # 30 сек таймаут
+            # Создаём новый coroutine на каждой попытке
+            coro = coro_func() if callable(coro_func) else coro_func
+            return await asyncio.wait_for(coro, timeout=30)
         except asyncio.TimeoutError as e:
             last_error = e
             logger.warning(f"Таймаут, попытка {attempt + 1}/{max_retries}")
@@ -301,7 +308,6 @@ async def process_condition(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 # ========== ФОТО (с правильной обработкой медиагрупп) ==========
-import asyncio
 from typing import Dict
 
 # Глобальное хранилище для сбора медиагрупп
@@ -568,12 +574,12 @@ async def show_preview(message: Message, state: FSMContext):
     try:
         if photos:
             if len(photos) == 1:
-                await send_with_retry(message.answer_photo(photo=photos[0], caption=preview_text, reply_markup=get_confirm_with_edit_keyboard()))
+                await send_with_retry(lambda: message.answer_photo(photo=photos[0], caption=preview_text, reply_markup=get_confirm_with_edit_keyboard()))
             else:
                 media_group = [InputMediaPhoto(media=photos[0], caption=preview_text)]
                 for photo in photos[1:10]:
                     media_group.append(InputMediaPhoto(media=photo))
-                await send_with_retry(message.answer_media_group(media=media_group))
+                await send_with_retry(lambda: message.answer_media_group(media=media_group))
                 await message.answer("👆 <b>Ваше объявление</b>", reply_markup=get_confirm_with_edit_keyboard())
         else:
             await message.answer(preview_text, reply_markup=get_confirm_with_edit_keyboard())
@@ -704,22 +710,41 @@ async def publish_to_channel(bot, bot_info, ad, data):
     channels = []
     if category_channel: channels.append(('категорию', category_channel))
     if main_channel: channels.append(('главный', main_channel))
+    
     for name, channel in channels:
         try:
             logger.info(f"Публикация в {name}: {channel}")
             if photos:
                 if len(photos) == 1:
-                    await send_with_retry(bot.send_photo(chat_id=channel, photo=photos[0], caption=text))
+                    # Простая отправка одного фото
+                    await bot.send_photo(chat_id=channel, photo=photos[0], caption=text)
                 else:
+                    # Создаём media_group
                     media_group = [InputMediaPhoto(media=photos[0], caption=text)]
                     for photo in photos[1:10]:
                         media_group.append(InputMediaPhoto(media=photo))
-                    await send_with_retry(bot.send_media_group(chat_id=channel, media=media_group))
+                    await bot.send_media_group(chat_id=channel, media=media_group)
             else:
-                await send_with_retry(bot.send_message(chat_id=channel, text=text))
+                await bot.send_message(chat_id=channel, text=text)
             logger.info(f"Опубликовано в {name}")
         except Exception as e:
             logger.error(f"Ошибка публикации в {channel}: {e}")
+            # Пробуем повторить один раз
+            try:
+                await asyncio.sleep(2)
+                if photos:
+                    if len(photos) == 1:
+                        await bot.send_photo(chat_id=channel, photo=photos[0], caption=text)
+                    else:
+                        media_group = [InputMediaPhoto(media=photos[0], caption=text)]
+                        for photo in photos[1:10]:
+                            media_group.append(InputMediaPhoto(media=photo))
+                        await bot.send_media_group(chat_id=channel, media=media_group)
+                else:
+                    await bot.send_message(chat_id=channel, text=text)
+                logger.info(f"Опубликовано в {name} (повторная попытка)")
+            except Exception as e2:
+                logger.error(f"Повторная ошибка публикации в {channel}: {e2}")
 
 @router.callback_query(F.data == "cancel")
 async def cancel_creation(callback: CallbackQuery, state: FSMContext):
