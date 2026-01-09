@@ -551,16 +551,19 @@ async def publish_to_channel(bot, bot_info, ad, data):
     delivery_text = f" | {DELIVERY_TYPES.get(delivery, '')}" if delivery else ""
     city_hashtag = get_city_hashtag(city) if city else ""
     subcategory_hashtag = get_subcategory_hashtag(subcategory) if subcategory else ""
+    
+    # Формируем текст с ссылками внутри (без кнопок)
     text = f"""{city_hashtag} {subcategory_hashtag}
 
 {deal_type_name}{condition_text}
 
-{title_text}{description_text}💰 {data.get('price', 'Не указана')}{delivery_text}"""
-    keyboard = InlineKeyboardBuilder()
-    keyboard.button(text="📢 Разместить объявление", url=f"https://t.me/{bot_info.username}")
-    keyboard.button(text="😎 Написать продавцу", url=f"tg://user?id={user_id}")
-    keyboard.adjust(1)
-    reply_markup = keyboard.as_markup()
+{title_text}{description_text}💰 {data.get('price', 'Не указана')}{delivery_text}
+
+━━━━━━━━━━━━━━━
+📢 <a href="https://t.me/{bot_info.username}">Разместить объявление</a>
+😎 <a href="tg://user?id={user_id}">Написать продавцу</a>
+👾 <a href="https://t.me/{bot_info.username}?start=profile_{user_id}">Профиль продавца</a>"""
+
     photos = data.get('photos', [])
     channels = []
     if category_channel: channels.append(('категорию', category_channel))
@@ -570,15 +573,14 @@ async def publish_to_channel(bot, bot_info, ad, data):
             logger.info(f"Публикация в {name}: {channel}")
             if photos:
                 if len(photos) == 1:
-                    await send_with_retry(bot.send_photo(chat_id=channel, photo=photos[0], caption=text, reply_markup=reply_markup))
+                    await send_with_retry(bot.send_photo(chat_id=channel, photo=photos[0], caption=text))
                 else:
                     media_group = [InputMediaPhoto(media=photos[0], caption=text)]
                     for photo in photos[1:10]:
                         media_group.append(InputMediaPhoto(media=photo))
                     await send_with_retry(bot.send_media_group(chat_id=channel, media=media_group))
-                    await bot.send_message(chat_id=channel, text="👆 Подробнее", reply_markup=reply_markup)
             else:
-                await send_with_retry(bot.send_message(chat_id=channel, text=text, reply_markup=reply_markup))
+                await send_with_retry(bot.send_message(chat_id=channel, text=text))
             logger.info(f"Опубликовано в {name}")
         except Exception as e:
             logger.error(f"Ошибка публикации в {channel}: {e}")
