@@ -172,7 +172,7 @@ async def show_seller_profile(message: Message, seller_id: int):
             # Формируем список объявлений с КЛИКАБЕЛЬНЫМИ ссылками
             ads_list = ""
             if active_ads:
-                for i, ad in enumerate(active_ads[:10], 1):
+                for i, ad in enumerate(active_ads, 1):
                     title = ad.title[:35] + "..." if len(ad.title) > 35 else ad.title
                     # Ссылка на объявление через deep link
                     ad_link = f"https://t.me/{bot_username}?start=ad_{ad.id}"

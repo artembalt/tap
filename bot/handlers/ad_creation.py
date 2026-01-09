@@ -39,30 +39,7 @@ class AdCreation(StatesGroup):
     delivery = State()
     confirm = State()
 
-async def send_with_retry(coro_func, max_retries=3, delay=1):
-    """
-    Выполняет coroutine с retry при ошибках сети.
-    ВАЖНО: передавать lambda/функцию, а не готовый coroutine!
-    Пример: await send_with_retry(lambda: bot.send_message(...))
-    """
-    last_error = None
-    for attempt in range(max_retries):
-        try:
-            # Создаём новый coroutine на каждой попытке
-            coro = coro_func() if callable(coro_func) else coro_func
-            return await asyncio.wait_for(coro, timeout=30)
-        except asyncio.TimeoutError as e:
-            last_error = e
-            logger.warning(f"Таймаут, попытка {attempt + 1}/{max_retries}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(delay * (attempt + 1))
-        except TelegramNetworkError as e:
-            last_error = e
-            logger.warning(f"Сетевая ошибка, попытка {attempt + 1}/{max_retries}: {e}")
-            if attempt < max_retries - 1:
-                await asyncio.sleep(delay * (attempt + 1))
-    logger.error(f"Все {max_retries} попытки исчерпаны")
-    raise last_error
+# Убран send_with_retry - прямые вызовы работают быстрее
 
 # ========== НАЧАЛО ==========
 @router.callback_query(F.data == "new_ad")
@@ -470,7 +447,7 @@ async def show_photo_progress(message: Message, state: FSMContext, photo_count: 
 async def skip_photos(callback: CallbackQuery, state: FSMContext):
     try: await callback.message.edit_reply_markup(reply_markup=None)
     except: pass
-    await ask_price(callback.message, state)
+    await ask_video(callback.message, state)
     await callback.answer()
 
 @router.callback_query(AdCreation.photos, F.data == "photos_done")
@@ -484,6 +461,39 @@ async def photos_done(callback: CallbackQuery, state: FSMContext):
     history = data.get('history_messages', [])
     history.append(msg.message_id)
     await state.update_data(history_messages=history)
+    await ask_video(callback.message, state)
+    await callback.answer()
+
+# ========== ВИДЕО (Шаг 10) ==========
+async def ask_video(message: Message, state: FSMContext):
+    await state.set_state(AdCreation.video)
+    from bot.keyboards.inline import get_video_keyboard
+    msg = await message.answer(
+        "🎬 <b>Шаг 10: Видео</b>\n\n"
+        "Отправьте видео товара (до 50 МБ).\n"
+        "Или нажмите <b>Пропустить</b>.",
+        reply_markup=get_video_keyboard()
+    )
+    data = await state.get_data()
+    history = data.get('history_messages', [])
+    history.append(msg.message_id)
+    await state.update_data(history_messages=history)
+
+@router.message(AdCreation.video, F.video)
+async def process_video(message: Message, state: FSMContext):
+    video_id = message.video.file_id
+    await state.update_data(video=video_id)
+    msg = await message.answer("✅ <b>Видео:</b> загружено")
+    data = await state.get_data()
+    history = data.get('history_messages', [])
+    history.append(msg.message_id)
+    await state.update_data(history_messages=history)
+    await ask_price(message, state)
+
+@router.callback_query(AdCreation.video, F.data == "video_skip")
+async def skip_video(callback: CallbackQuery, state: FSMContext):
+    try: await callback.message.edit_reply_markup(reply_markup=None)
+    except: pass
     await ask_price(callback.message, state)
     await callback.answer()
 
@@ -491,7 +501,7 @@ async def photos_done(callback: CallbackQuery, state: FSMContext):
 async def ask_price(message: Message, state: FSMContext):
     await state.set_state(AdCreation.price)
     from bot.keyboards.inline import get_price_keyboard
-    msg = await message.answer("💰 <b>Шаг 10: Цена</b>\n\nВведите цену (число):", reply_markup=get_price_keyboard())
+    msg = await message.answer("💰 <b>Шаг 11: Цена</b>\n\nВведите цену (число):", reply_markup=get_price_keyboard())
     data = await state.get_data()
     history = data.get('history_messages', [])
     history.append(msg.message_id)
@@ -539,7 +549,7 @@ async def price_negotiable(callback: CallbackQuery, state: FSMContext):
 async def ask_delivery(message: Message, state: FSMContext):
     await state.set_state(AdCreation.delivery)
     from bot.keyboards.inline import get_delivery_keyboard
-    msg = await message.answer("🚚 <b>Шаг 11: Доставка</b>\n\nВыберите доставку:", reply_markup=get_delivery_keyboard())
+    msg = await message.answer("🚚 <b>Шаг 12: Доставка</b>\n\nВыберите доставку:", reply_markup=get_delivery_keyboard())
     data = await state.get_data()
     history = data.get('history_messages', [])
     history.append(msg.message_id)
@@ -574,12 +584,14 @@ async def show_preview(message: Message, state: FSMContext):
     try:
         if photos:
             if len(photos) == 1:
-                await send_with_retry(lambda: message.answer_photo(photo=photos[0], caption=preview_text, reply_markup=get_confirm_with_edit_keyboard()))
+                # Прямой вызов без retry — быстро!
+                await message.answer_photo(photo=photos[0], caption=preview_text, reply_markup=get_confirm_with_edit_keyboard())
             else:
                 media_group = [InputMediaPhoto(media=photos[0], caption=preview_text)]
                 for photo in photos[1:10]:
                     media_group.append(InputMediaPhoto(media=photo))
-                await send_with_retry(lambda: message.answer_media_group(media=media_group))
+                # Прямой вызов без retry — быстро!
+                await message.answer_media_group(media=media_group)
                 await message.answer("👆 <b>Ваше объявление</b>", reply_markup=get_confirm_with_edit_keyboard())
         else:
             await message.answer(preview_text, reply_markup=get_confirm_with_edit_keyboard())
