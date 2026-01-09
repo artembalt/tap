@@ -5,7 +5,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from aiohttp import web, ClientTimeout, TCPConnector
+from aiohttp import web, ClientTimeout
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -79,21 +79,7 @@ def create_optimized_session() -> AiohttpSession:
         sock_connect=10     # Таймаут на socket connect
     )
     
-    # Коннектор с оптимизациями
-    connector = TCPConnector(
-        limit=100,              # Максимум соединений
-        limit_per_host=30,      # Максимум соединений на хост
-        ttl_dns_cache=300,      # Кэш DNS на 5 минут
-        use_dns_cache=True,     # Использовать DNS кэш
-        keepalive_timeout=30,   # Keep-alive
-        enable_cleanup_closed=True,  # Очистка закрытых соединений
-        force_close=False       # Не закрывать принудительно
-    )
-    
-    return AiohttpSession(
-        timeout=timeout,
-        connector=connector
-    )
+    return AiohttpSession(timeout=timeout)
 
 
 async def main():
