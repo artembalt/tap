@@ -128,18 +128,8 @@ async def show_seller_profile(message: Message, seller_id: int):
                 await message.answer("❌ Продавец не найден")
                 return
             
-            # Увеличиваем счётчик просмотров профиля
-            # Проверяем есть ли profile_views в premium_features
-            premium = seller.premium_features or {}
-            profile_views = premium.get('profile_views', 0) + 1
-            
-            # Не считаем просмотр своего профиля
-            if message.from_user.id != seller_id:
-                premium['profile_views'] = profile_views
-                seller.premium_features = premium
-                await session.commit()
-            else:
-                profile_views = premium.get('profile_views', 0)
+            # Счётчик просмотров хранится в отдельном поле или в Redis
+            # Пока просто считаем количество просмотров как сумму просмотров объявлений
             
             # Получаем активные объявления
             active_ads_result = await session.execute(
@@ -149,6 +139,12 @@ async def show_seller_profile(message: Message, seller_id: int):
                 ).order_by(Ad.created_at.desc())
             )
             active_ads = active_ads_result.scalars().all()
+            
+            # Считаем просмотры профиля как сумму просмотров всех объявлений
+            profile_views = 0
+            for ad in active_ads:
+                pf = ad.premium_features or {}
+                profile_views += pf.get('views', 0)
             
             # Получаем количество завершённых (архив + удалённые)
             completed_count_result = await session.execute(
@@ -191,7 +187,6 @@ async def show_seller_profile(message: Message, seller_id: int):
 👤 Имя: {seller_name}
 📱 Username: {username_text}
 📅 Регистрация: {reg_date}
-👁 Просмотров профиля: {profile_views}
 
 📊 <b>Статистика:</b>
 • Активных объявлений: {len(active_ads)}

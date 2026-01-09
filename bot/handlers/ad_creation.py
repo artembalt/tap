@@ -376,6 +376,9 @@ async def process_photo(message: Message, state: FSMContext):
             photos.append(photo_id)
             await state.update_data(photos=photos)
             await show_photo_progress(message, state, len(photos))
+        else:
+            # Фото уже загружено — сообщаем
+            await show_photo_progress(message, state, len(photos), already_loaded=1)
 
 async def process_media_group_delayed(media_group_id: str, message: Message, state: FSMContext):
     """Отложенная обработка медиагруппы — ждём 1 секунду чтобы собрать все фото."""
@@ -400,10 +403,15 @@ async def process_media_group_delayed(media_group_id: str, message: Message, sta
     
     # Добавляем фото из группы
     added_count = 0
+    skipped_count = 0
     for photo_id in group_photos:
-        if len(photos) < 10 and photo_id not in photos:
+        if len(photos) >= 10:
+            break
+        if photo_id not in photos:
             photos.append(photo_id)
             added_count += 1
+        else:
+            skipped_count += 1
     
     # Помечаем группу как обработанную
     processed_groups.append(media_group_id)
@@ -411,11 +419,14 @@ async def process_media_group_delayed(media_group_id: str, message: Message, sta
     
     del media_group_data[media_group_id]
     
-    # Показываем прогресс ОДИН раз после сбора всей группы
+    # Показываем прогресс ВСЕГДА — даже если фото уже были загружены
     if added_count > 0:
         await show_photo_progress(message, state, len(photos))
+    elif skipped_count > 0:
+        # Фото уже были загружены ранее — сообщаем об этом
+        await show_photo_progress(message, state, len(photos), already_loaded=skipped_count)
 
-async def show_photo_progress(message: Message, state: FSMContext, photo_count: int):
+async def show_photo_progress(message: Message, state: FSMContext, photo_count: int, already_loaded: int = 0):
     """Показать прогресс загрузки фото — ОДНО сообщение с кнопкой Далее."""
     from bot.keyboards.inline import get_photo_done_keyboard
     
@@ -437,7 +448,10 @@ async def show_photo_progress(message: Message, state: FSMContext, photo_count: 
         await state.update_data(photo_prompt_msg_id=None)
     
     # Текст сообщения
-    if photo_count >= 10:
+    if already_loaded > 0:
+        # Фото уже были загружены ранее
+        text = f"⚠️ <b>Эти фото уже загружены!</b>\n\n✅ Всего: {photo_count} из 10 фото.\n\nДобавьте другие фото или нажмите <b>Далее</b>."
+    elif photo_count >= 10:
         text = f"✅ <b>Загружено {photo_count} из 10 фото.</b>\n\nНажмите <b>Далее</b>."
     else:
         text = f"✅ <b>Загружено {photo_count} из 10 фото.</b>\n\nДобавьте ещё или нажмите <b>Далее</b>."
