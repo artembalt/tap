@@ -1,5 +1,5 @@
 # bot/keyboards/inline.py
-"""Inline клавиатуры бота"""
+"""Inline клавиатуры для бота"""
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -33,7 +33,22 @@ def get_regions_keyboard() -> InlineKeyboardMarkup:
     for key, name in REGIONS.items():
         builder.button(text=name, callback_data=f"region_{key}")
     
-    builder.button(text="❌ Отмена", callback_data="cancel_creation")
+    builder.button(text="❌ Отмена", callback_data="cancel")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def get_cities_keyboard(region: str) -> InlineKeyboardMarkup:
+    """Клавиатура выбора города для региона"""
+    from shared.regions_config import CITIES
+    
+    builder = InlineKeyboardBuilder()
+    
+    cities = CITIES.get(region, {})
+    for key, name in cities.items():
+        builder.button(text=name, callback_data=f"city_{key}")
+    
+    builder.button(text="🔙 Назад", callback_data="back_to_region")
     builder.adjust(2)
     return builder.as_markup()
 
@@ -47,7 +62,7 @@ def get_categories_keyboard() -> InlineKeyboardMarkup:
     for key, name in CATEGORIES.items():
         builder.button(text=name, callback_data=f"category_{key}")
     
-    builder.button(text="❌ Отмена", callback_data="cancel_creation")
+    builder.button(text="🔙 Назад", callback_data="back_to_city")
     builder.adjust(2)
     return builder.as_markup()
 
@@ -63,7 +78,6 @@ def get_subcategories_keyboard(category: str) -> InlineKeyboardMarkup:
         builder.button(text=name, callback_data=f"subcategory_{key}")
     
     builder.button(text="🔙 Назад", callback_data="back_to_category")
-    builder.button(text="❌ Отмена", callback_data="cancel_creation")
     builder.adjust(2)
     return builder.as_markup()
 
@@ -78,7 +92,6 @@ def get_deal_types_keyboard() -> InlineKeyboardMarkup:
         builder.button(text=name, callback_data=f"deal_{key}")
     
     builder.button(text="🔙 Назад", callback_data="back_to_subcategory")
-    builder.button(text="❌ Отмена", callback_data="cancel_creation")
     builder.adjust(2)
     return builder.as_markup()
 
@@ -92,13 +105,12 @@ def get_condition_keyboard() -> InlineKeyboardMarkup:
     for key, name in CONDITION_TYPES.items():
         builder.button(text=name, callback_data=f"condition_{key}")
     
-    builder.button(text="❌ Отмена", callback_data="cancel_creation")
     builder.adjust(2)
     return builder.as_markup()
 
 
 def get_delivery_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора способа доставки"""
+    """Клавиатура выбора доставки"""
     from shared.regions_config import DELIVERY_TYPES
     
     builder = InlineKeyboardBuilder()
@@ -106,68 +118,45 @@ def get_delivery_keyboard() -> InlineKeyboardMarkup:
     for key, name in DELIVERY_TYPES.items():
         builder.button(text=name, callback_data=f"delivery_{key}")
     
-    builder.button(text="❌ Отмена", callback_data="cancel_creation")
     builder.adjust(2)
     return builder.as_markup()
 
 
 def get_price_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для ввода цены"""
+    """Клавиатура для цены"""
     builder = InlineKeyboardBuilder()
-    builder.button(text="💬 Договорная", callback_data="negotiable")
-    builder.button(text="❌ Отмена", callback_data="cancel_creation")
+    builder.button(text="💬 Договорная", callback_data="price_negotiable")
+    builder.button(text="❌ Отмена", callback_data="cancel")
     builder.adjust(1)
     return builder.as_markup()
 
 
-# ========== КЛАВИАТУРЫ ДЛЯ ЗАГРУЗКИ ФОТО ==========
-
 def get_photo_skip_keyboard() -> InlineKeyboardMarkup:
-    """
-    Клавиатура при первом запросе фото.
-    Только кнопка Пропустить.
-    """
+    """Клавиатура при запросе фото - только Пропустить"""
     builder = InlineKeyboardBuilder()
-    builder.button(text="⏭️ Пропустить", callback_data="skip_photos")
+    builder.button(text="⏭ Пропустить", callback_data="photos_skip")
+    builder.adjust(1)
     return builder.as_markup()
 
 
 def get_photo_done_keyboard() -> InlineKeyboardMarkup:
-    """
-    Клавиатура после загрузки фото.
-    Только кнопка Далее.
-    """
+    """Клавиатура после загрузки фото - только Далее"""
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Далее", callback_data="photos_done")
-    return builder.as_markup()
-
-
-# Для обратной совместимости
-def get_skip_and_done_keyboard() -> InlineKeyboardMarkup:
-    """Только Пропустить (для первого запроса фото)"""
-    return get_photo_skip_keyboard()
-
-
-def get_photo_done_only_keyboard() -> InlineKeyboardMarkup:
-    """Только Далее (после загрузки фото)"""
-    return get_photo_done_keyboard()
-
-
-# ========== КЛАВИАТУРЫ ДЛЯ ВИДЕО ==========
-
-def get_skip_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура с кнопкой Пропустить (для видео)"""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="⏭️ Пропустить", callback_data="skip_video")
-    builder.button(text="❌ Отмена", callback_data="cancel_creation")
     builder.adjust(1)
     return builder.as_markup()
 
 
-# ========== КЛАВИАТУРЫ ПОДТВЕРЖДЕНИЯ ==========
+def get_video_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для видео"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="⏭ Пропустить", callback_data="video_skip")
+    builder.adjust(1)
+    return builder.as_markup()
+
 
 def get_confirm_with_edit_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения с возможностью редактирования"""
+    """Клавиатура подтверждения с редактированием"""
     builder = InlineKeyboardBuilder()
     builder.button(text="✅ Опубликовать", callback_data="confirm_publish")
     builder.button(text="✏️ Редактировать", callback_data="edit_ad")
@@ -177,30 +166,22 @@ def get_confirm_with_edit_keyboard() -> InlineKeyboardMarkup:
 
 
 def get_confirm_keyboard() -> InlineKeyboardMarkup:
-    """Простая клавиатура подтверждения"""
+    """Клавиатура подтверждения"""
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Подтвердить", callback_data="confirm")
-    builder.button(text="❌ Отмена", callback_data="cancel")
-    builder.adjust(2)
+    builder.button(text="✅ Опубликовать", callback_data="confirm_publish")
+    builder.button(text="❌ Отмена", callback_data="cancel_ad")
     return builder.as_markup()
 
 
-def get_confirm_delete_keyboard(ad_id: str) -> InlineKeyboardMarkup:
-    """Клавиатура подтверждения удаления"""
+def get_edit_preview_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура редактирования полей превью"""
     builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Да, удалить", callback_data=f"confirm_delete_{ad_id}")
-    builder.button(text="❌ Отмена", callback_data="cancel_delete")
-    builder.adjust(1)
-    return builder.as_markup()
-
-
-# ========== КЛАВИАТУРЫ ДЛЯ ОБЪЯВЛЕНИЙ ==========
-
-def get_ad_type_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура выбора типа объявления"""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="💰 Продаю", callback_data="type_sell")
-    builder.button(text="🔍 Куплю", callback_data="type_buy")
+    builder.button(text="📝 Заголовок", callback_data="edit_title")
+    builder.button(text="📄 Описание", callback_data="edit_description")
+    builder.button(text="💰 Цена", callback_data="edit_price")
+    builder.button(text="📸 Фото", callback_data="edit_photos")
+    builder.button(text="🎥 Видео", callback_data="edit_video")
+    builder.button(text="🔙 Назад к превью", callback_data="back_to_preview")
     builder.adjust(2)
     return builder.as_markup()
 
@@ -210,7 +191,6 @@ def get_phone_settings_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="📱 Показывать номер", callback_data="phone_show")
     builder.button(text="🔒 Скрыть номер", callback_data="phone_hide")
-    builder.adjust(1)
     return builder.as_markup()
 
 
@@ -248,43 +228,17 @@ def get_ad_actions_keyboard(ad_id: str, is_owner: bool = False) -> InlineKeyboar
     return builder.as_markup()
 
 
-def get_edit_options_keyboard(ad_id: str) -> InlineKeyboardMarkup:
-    """Клавиатура выбора что редактировать"""
+def get_confirm_delete_keyboard(ad_id: str) -> InlineKeyboardMarkup:
+    """Клавиатура подтверждения удаления"""
     builder = InlineKeyboardBuilder()
-    
-    builder.button(text="📝 Заголовок", callback_data=f"edit_title_{ad_id}")
-    builder.button(text="📄 Описание", callback_data=f"edit_description_{ad_id}")
-    builder.button(text="💰 Цену", callback_data=f"edit_price_{ad_id}")
-    builder.button(text="📸 Фото", callback_data=f"edit_photos_{ad_id}")
-    builder.button(text="🔙 Назад", callback_data=f"view_my_ad_{ad_id}")
-    
-    builder.adjust(2, 2, 1)
-    return builder.as_markup()
-
-
-def get_edit_preview_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура редактирования полей превью"""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="📝 Заголовок", callback_data="edit_title")
-    builder.button(text="📄 Описание", callback_data="edit_description")
-    builder.button(text="💰 Цена", callback_data="edit_price")
-    builder.button(text="📸 Фото", callback_data="edit_photos")
-    builder.button(text="🎥 Видео", callback_data="edit_video")
-    builder.button(text="🔙 Назад к превью", callback_data="back_to_preview")
-    builder.adjust(2)
+    builder.button(text="✅ Да, удалить", callback_data=f"confirm_delete_{ad_id}")
+    builder.button(text="❌ Отмена", callback_data="cancel_delete")
+    builder.adjust(1)
     return builder.as_markup()
 
 
 def get_back_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура с кнопкой назад в главное меню"""
+    """Клавиатура с кнопкой назад"""
     builder = InlineKeyboardBuilder()
     builder.button(text="🔙 Главное меню", callback_data="back_to_menu")
-    return builder.as_markup()
-
-
-def get_photo_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для загрузки фото (устаревшая, для совместимости)"""
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Готово", callback_data="photos_done")
-    builder.button(text="❌ Отмена", callback_data="cancel_creation")
     return builder.as_markup()
