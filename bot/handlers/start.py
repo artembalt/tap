@@ -172,7 +172,7 @@ async def show_seller_profile(message: Message, seller_id: int):
             # Формируем список объявлений с КЛИКАБЕЛЬНЫМИ ссылками
             ads_list = ""
             if active_ads:
-                for i, ad in enumerate(active_ads, 1):
+                for i, ad in enumerate(active_ads[:10], 1):
                     title = ad.title[:35] + "..." if len(ad.title) > 35 else ad.title
                     # Ссылка на объявление через deep link
                     ad_link = f"https://t.me/{bot_username}?start=ad_{ad.id}"
@@ -194,33 +194,17 @@ async def show_seller_profile(message: Message, seller_id: int):
 📋 <b>Активные объявления:</b>
 {ads_list}"""
 
-            # Отправляем с retry при сетевых ошибках
-            for attempt in range(3):
-                try:
-                    await message.answer(
-                        profile_text,
-                        reply_markup=get_back_keyboard(),
-                        disable_web_page_preview=True
-                    )
-                    logger.info(f"Профиль {seller_id} показан успешно")
-                    return
-                except TelegramNetworkError as e:
-                    logger.warning(f"Сетевая ошибка при показе профиля (попытка {attempt + 1}/3): {e}")
-                    if attempt < 2:
-                        await asyncio.sleep(2)
-                    else:
-                        raise
+            # Отправляем профиль (RetryMiddleware автоматически повторит при ошибках)
+            await message.answer(
+                profile_text,
+                reply_markup=get_back_keyboard(),
+                disable_web_page_preview=True
+            )
+            logger.info(f"Профиль {seller_id} показан успешно")
             
     except Exception as e:
         logger.error(f"Ошибка при показе профиля: {e}", exc_info=True)
-        # Пробуем отправить ошибку тоже с retry
-        for attempt in range(2):
-            try:
-                await message.answer("❌ Ошибка при загрузке профиля. Попробуйте ещё раз.")
-                break
-            except:
-                if attempt < 1:
-                    await asyncio.sleep(1)
+        await message.answer("❌ Ошибка при загрузке профиля. Попробуйте ещё раз.")
 
 
 @router.message(Command("help"))

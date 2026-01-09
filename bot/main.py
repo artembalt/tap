@@ -1,28 +1,32 @@
 # bot/main.py
-"""Главный файл Telegram бота для платформы объявлений"""
+"""Главный файл Telegram бота - с оптимизацией сети для российских VPS"""
 
 import asyncio
 import logging
 import sys
 from pathlib import Path
+from aiohttp import web, ClientTimeout, TCPConnector
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 from redis.asyncio import Redis
 
 # Добавляем корневую директорию в путь
 sys.path.append(str(Path(__file__).parent.parent))
 
 from bot.config import settings
-from bot.database.connection import init_db, get_session_maker
+from bot.database.connection import init_db
 from bot.handlers import (
     start, ad_creation, ad_management, 
     search, profile, admin, payment
 )
 from bot.middlewares.antiflood import AntiFloodMiddleware
 from bot.middlewares.auth import AuthMiddleware
+from bot.middlewares.retry import RetryMiddleware
 from bot.utils.commands import set_bot_commands
 
 # Настройка логирования
@@ -36,42 +40,64 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Webhook настройки
+WEBHOOK_PATH = "/webhook/bot"
+DOMAIN = getattr(settings, 'DOMAIN', 'prodaybot.ru')
+WEBHOOK_URL = f"https://{DOMAIN}{WEBHOOK_PATH}"
+WEB_SERVER_HOST = "127.0.0.1"
+WEB_SERVER_PORT = 8080
+
 async def on_startup(bot: Bot):
     """Действия при запуске бота"""
-    logger.info("Бот запущен")
-    
-    # Инициализация базы данных
+    logger.info("Запуск webhook бота...")
     await init_db()
-    
-    # Установка команд бота
     await set_bot_commands(bot)
     
-    # Отправка уведомления админам
-    for admin_id in settings.ADMIN_IDS:
-        try:
-            await bot.send_message(
-                admin_id, 
-                "✅ Бот успешно запущен!"
-            )
-        except Exception as e:
-            logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
+    # Устанавливаем webhook
+    await bot.set_webhook(
+        url=WEBHOOK_URL,
+        drop_pending_updates=True
+    )
+    logger.info(f"Webhook установлен: {WEBHOOK_URL}")
 
 async def on_shutdown(bot: Bot):
     """Действия при остановке бота"""
-    logger.info("Бот остановлен")
+    logger.info("Остановка webhook бота...")
+    await bot.delete_webhook()
+
+
+def create_optimized_session() -> AiohttpSession:
+    """
+    Создаёт оптимизированную сессию для работы с Telegram API.
+    Решает проблемы с нестабильной сетью на российских VPS.
+    """
+    # Короткие таймауты - лучше быстро получить ошибку и повторить
+    timeout = ClientTimeout(
+        total=30,           # Общий таймаут запроса
+        connect=10,         # Таймаут на установку соединения
+        sock_read=20,       # Таймаут на чтение данных
+        sock_connect=10     # Таймаут на socket connect
+    )
     
-    # Отправка уведомления админам
-    for admin_id in settings.ADMIN_IDS:
-        try:
-            await bot.send_message(
-                admin_id, 
-                "⚠️ Бот остановлен"
-            )
-        except Exception as e:
-            logger.error(f"Не удалось отправить уведомление админу {admin_id}: {e}")
+    # Коннектор с оптимизациями
+    connector = TCPConnector(
+        limit=100,              # Максимум соединений
+        limit_per_host=30,      # Максимум соединений на хост
+        ttl_dns_cache=300,      # Кэш DNS на 5 минут
+        use_dns_cache=True,     # Использовать DNS кэш
+        keepalive_timeout=30,   # Keep-alive
+        enable_cleanup_closed=True,  # Очистка закрытых соединений
+        force_close=False       # Не закрывать принудительно
+    )
+    
+    return AiohttpSession(
+        timeout=timeout,
+        connector=connector
+    )
+
 
 async def main():
-    """Основная функция запуска бота"""
+    """Основная функция запуска бота с webhook"""
     
     # Инициализация Redis для FSM
     redis = Redis(
@@ -82,20 +108,15 @@ async def main():
         decode_responses=True
     )
     
-    # Проверка подключения к Redis
-    try:
-        await redis.ping()
-        logger.info("Redis подключен")
-    except Exception as e:
-        logger.error(f"Ошибка подключения к Redis: {e}")
-        raise
-    
-    # Создание хранилища состояний
     storage = RedisStorage(redis=redis)
     
-    # Инициализация бота и диспетчера
+    # Создаём оптимизированную сессию
+    session = create_optimized_session()
+    
+    # Инициализация бота с кастомной сессией
     bot = Bot(
         token=settings.BOT_TOKEN,
+        session=session,
         default=DefaultBotProperties(
             parse_mode=ParseMode.HTML
         )
@@ -103,7 +124,9 @@ async def main():
     
     dp = Dispatcher(storage=storage)
     
-    # Регистрация middleware
+    # Регистрация middleware (RetryMiddleware первым - для перехвата сетевых ошибок)
+    dp.message.middleware(RetryMiddleware(max_retries=3, base_delay=1.0))
+    dp.callback_query.middleware(RetryMiddleware(max_retries=3, base_delay=1.0))
     dp.message.middleware(AntiFloodMiddleware())
     dp.callback_query.middleware(AntiFloodMiddleware())
     dp.message.middleware(AuthMiddleware())
@@ -117,25 +140,39 @@ async def main():
     dp.include_router(payment.router)
     dp.include_router(admin.router)
     
-    # Регистрация startup и shutdown хуков
+    # Регистрация хуков
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
     
-    # Запуск бота
+    # Создаём веб-приложение
+    app = web.Application()
+    
+    # Настраиваем webhook handler
+    webhook_requests_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot
+    )
+    webhook_requests_handler.register(app, path=WEBHOOK_PATH)
+    setup_application(app, dp, bot=bot)
+    
+    # Запуск сервера
+    logger.info(f"Запуск сервера на {WEB_SERVER_HOST}:{WEB_SERVER_PORT}")
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
+    
     try:
-        logger.info("Запуск бота...")
-        await dp.start_polling(
-            bot,
-            allowed_updates=dp.resolve_used_update_types(),
-            drop_pending_updates=True,
-            polling_timeout=10
-        )
+        await site.start()
+        # Держим сервер запущенным
+        await asyncio.Event().wait()
     except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}")
+        logger.error(f"Ошибка сервера: {e}")
         raise
     finally:
+        await runner.cleanup()
         await bot.session.close()
         await redis.close()
+
 
 if __name__ == "__main__":
     try:
