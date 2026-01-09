@@ -572,33 +572,17 @@ async def process_delivery(callback: CallbackQuery, state: FSMContext):
 
 # ========== ПРЕВЬЮ ==========
 async def show_preview(message: Message, state: FSMContext):
+    """Показ превью — только текст для скорости. Фото/видео будут в канале."""
     logger.info("Показ превью")
     data = await state.get_data()
     await state.set_state(AdCreation.confirm)
     preview_text = format_ad_preview(data)
-    if len(preview_text) > 1024:
-        preview_text = preview_text[:1020] + "..."
     from bot.keyboards.inline import get_confirm_with_edit_keyboard
-    photos = data.get('photos', [])
-    logger.info(f"Превью: {len(photos)} фото")
-    try:
-        if photos:
-            if len(photos) == 1:
-                # Прямой вызов без retry — быстро!
-                await message.answer_photo(photo=photos[0], caption=preview_text, reply_markup=get_confirm_with_edit_keyboard())
-            else:
-                media_group = [InputMediaPhoto(media=photos[0], caption=preview_text)]
-                for photo in photos[1:10]:
-                    media_group.append(InputMediaPhoto(media=photo))
-                # Прямой вызов без retry — быстро!
-                await message.answer_media_group(media=media_group)
-                await message.answer("👆 <b>Ваше объявление</b>", reply_markup=get_confirm_with_edit_keyboard())
-        else:
-            await message.answer(preview_text, reply_markup=get_confirm_with_edit_keyboard())
-        logger.info("Превью отправлено")
-    except Exception as e:
-        logger.error(f"Ошибка превью: {e}")
-        await message.answer(preview_text, reply_markup=get_confirm_with_edit_keyboard())
+    
+    # Показываем ТОЛЬКО текст — это быстро и надёжно
+    # Фото и видео будут опубликованы в канале
+    await message.answer(preview_text, reply_markup=get_confirm_with_edit_keyboard())
+    logger.info("Превью отправлено")
 
 def format_ad_preview(data: dict) -> str:
     region = data.get('region', '')
@@ -719,6 +703,7 @@ async def publish_to_channel(bot, bot_info, ad, data):
 👾 <a href="https://t.me/{bot_info.username}?start=profile_{user_id}">Профиль продавца</a>"""
 
     photos = data.get('photos', [])
+    video = data.get('video')  # Получаем видео
     channels = []
     if category_channel: channels.append(('категорию', category_channel))
     if main_channel: channels.append(('главный', main_channel))
@@ -726,35 +711,47 @@ async def publish_to_channel(bot, bot_info, ad, data):
     for name, channel in channels:
         try:
             logger.info(f"Публикация в {name}: {channel}")
-            if photos:
-                if len(photos) == 1:
-                    # Простая отправка одного фото
-                    await bot.send_photo(chat_id=channel, photo=photos[0], caption=text)
-                else:
-                    # Создаём media_group
-                    media_group = [InputMediaPhoto(media=photos[0], caption=text)]
-                    for photo in photos[1:10]:
+            
+            # Собираем медиа (фото + видео)
+            if photos or video:
+                media_group = []
+                
+                # Добавляем фото
+                for i, photo in enumerate(photos[:9]):  # Максимум 9 фото если есть видео
+                    if i == 0:
+                        media_group.append(InputMediaPhoto(media=photo, caption=text))
+                    else:
                         media_group.append(InputMediaPhoto(media=photo))
+                
+                # Добавляем видео
+                if video:
+                    if not media_group:
+                        # Только видео, без фото
+                        media_group.append(InputMediaVideo(media=video, caption=text))
+                    else:
+                        media_group.append(InputMediaVideo(media=video))
+                
+                # Отправляем
+                if len(media_group) == 1:
+                    # Одно фото или одно видео
+                    if photos:
+                        await bot.send_photo(chat_id=channel, photo=photos[0], caption=text)
+                    else:
+                        await bot.send_video(chat_id=channel, video=video, caption=text)
+                else:
                     await bot.send_media_group(chat_id=channel, media=media_group)
             else:
+                # Без медиа — только текст
                 await bot.send_message(chat_id=channel, text=text)
+            
             logger.info(f"Опубликовано в {name}")
         except Exception as e:
             logger.error(f"Ошибка публикации в {channel}: {e}")
-            # Пробуем повторить один раз
+            # Пробуем повторить один раз без медиа
             try:
-                await asyncio.sleep(2)
-                if photos:
-                    if len(photos) == 1:
-                        await bot.send_photo(chat_id=channel, photo=photos[0], caption=text)
-                    else:
-                        media_group = [InputMediaPhoto(media=photos[0], caption=text)]
-                        for photo in photos[1:10]:
-                            media_group.append(InputMediaPhoto(media=photo))
-                        await bot.send_media_group(chat_id=channel, media=media_group)
-                else:
-                    await bot.send_message(chat_id=channel, text=text)
-                logger.info(f"Опубликовано в {name} (повторная попытка)")
+                await asyncio.sleep(1)
+                await bot.send_message(chat_id=channel, text=text + "\n\n⚠️ Медиа временно недоступны")
+                logger.info(f"Опубликовано в {name} (только текст)")
             except Exception as e2:
                 logger.error(f"Повторная ошибка публикации в {channel}: {e2}")
 
