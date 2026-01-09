@@ -1,16 +1,42 @@
+# bot/handlers/start.py
+"""Обработчики старта и профиля продавца"""
 
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.fsm.context import FSMContext
+from sqlalchemy import select, func
 
-from bot.keyboards.inline import get_main_menu_keyboard
+from bot.keyboards.inline import get_main_menu_keyboard, get_back_keyboard
 from bot.keyboards.reply import get_main_reply_keyboard
 from bot.database.queries import UserQueries
+from bot.database.connection import get_db_session
+from bot.database.models import User, Ad, AdStatus
 
 router = Router(name='start')
 logger = logging.getLogger(__name__)
+
+
+@router.message(CommandStart(deep_link=True))
+async def cmd_start_with_args(message: Message, command: CommandObject, state: FSMContext):
+    """Обработка /start с параметрами (deep link)"""
+    await state.clear()
+    
+    args = command.args
+    
+    # Обработка профиля продавца
+    if args and args.startswith("profile_"):
+        try:
+            seller_id = int(args.replace("profile_", ""))
+            await show_seller_profile(message, seller_id)
+            return
+        except ValueError:
+            pass
+    
+    # Обычный старт
+    await cmd_start(message, state)
+
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
@@ -28,12 +54,11 @@ async def cmd_start(message: Message, state: FSMContext):
     welcome_text = f"""
 👋 Добро пожаловать, {message.from_user.first_name}!
 
-🎯 <b>Telegram Ads Platform</b> - платформа для размещения объявлений в Telegram.
+🎯 <b>Продай БОТ</b> — платформа для размещения объявлений в Telegram.
 
 📋 <b>Что вы можете делать:</b>
 • Размещать объявления о продаже/покупке
 • Искать товары и услуги в вашем регионе
-• Сохранять интересные объявления
 • Связываться с продавцами напрямую
 
 🚀 <b>Выберите действие из меню ниже:</b>
@@ -49,6 +74,86 @@ async def cmd_start(message: Message, state: FSMContext):
         reply_markup=get_main_menu_keyboard()
     )
 
+
+async def show_seller_profile(message: Message, seller_id: int):
+    """Показать профиль продавца"""
+    try:
+        async with get_db_session() as session:
+            # Получаем данные продавца
+            result = await session.execute(
+                select(User).where(User.telegram_id == seller_id)
+            )
+            seller = result.scalar_one_or_none()
+            
+            if not seller:
+                await message.answer("❌ Продавец не найден")
+                return
+            
+            # Увеличиваем счётчик просмотров профиля
+            # (если есть такое поле, иначе пропускаем)
+            
+            # Получаем активные объявления
+            active_ads_result = await session.execute(
+                select(Ad).where(
+                    Ad.user_id == seller_id,
+                    Ad.status == AdStatus.ACTIVE.value
+                ).order_by(Ad.created_at.desc())
+            )
+            active_ads = active_ads_result.scalars().all()
+            
+            # Получаем количество завершённых (архив + удалённые)
+            completed_count_result = await session.execute(
+                select(func.count(Ad.id)).where(
+                    Ad.user_id == seller_id,
+                    Ad.status.in_([AdStatus.ARCHIVED.value, AdStatus.DELETED.value])
+                )
+            )
+            completed_count = completed_count_result.scalar() or 0
+            
+            # Формируем имя
+            seller_name = seller.first_name or "Пользователь"
+            if seller.last_name:
+                seller_name += f" {seller.last_name}"
+            
+            # Username
+            username_text = f"@{seller.username}" if seller.username else "не указан"
+            
+            # Дата регистрации
+            reg_date = seller.created_at.strftime("%d.%m.%Y") if seller.created_at else "неизвестно"
+            
+            # Формируем список объявлений
+            ads_list = ""
+            if active_ads:
+                for i, ad in enumerate(active_ads[:10], 1):
+                    title = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
+                    ads_list += f"  {i}. {title}\n"
+            else:
+                ads_list = "  Нет активных объявлений\n"
+            
+            profile_text = f"""👤 <b>Профиль продавца</b>
+
+🆔 ID: <code>{seller_id}</code>
+👤 Имя: {seller_name}
+📱 Username: {username_text}
+📅 Регистрация: {reg_date}
+
+📊 <b>Статистика:</b>
+• Активных объявлений: {len(active_ads)}
+• Завершённых: {completed_count}
+
+📋 <b>Активные объявления:</b>
+{ads_list}"""
+
+            await message.answer(
+                profile_text,
+                reply_markup=get_back_keyboard()
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка при показе профиля: {e}", exc_info=True)
+        await message.answer("❌ Ошибка при загрузке профиля")
+
+
 @router.message(Command("help"))
 async def cmd_help(message: Message):
     """Показать справку"""
@@ -56,13 +161,12 @@ async def cmd_help(message: Message):
 📖 <b>Справка по использованию бота</b>
 
 <b>Основные команды:</b>
-/start - Перезапустить бота
-/new_ad - Создать объявление
-/my_ads - Мои объявления
-/search - Поиск объявлений
-/help - Эта справка
+/start — Перезапустить бота
+/create — Создать объявление
+/help — Эта справка
 """
     await message.answer(help_text)
+
 
 @router.callback_query(F.data == "help")
 async def callback_help(callback: CallbackQuery):
@@ -70,9 +174,11 @@ async def callback_help(callback: CallbackQuery):
     await callback.answer("Справка отправлена в чат", show_alert=False)
     await cmd_help(callback.message)
 
+
 @router.callback_query(F.data == "back_to_menu")
-async def back_to_menu(callback: CallbackQuery):
+async def back_to_menu(callback: CallbackQuery, state: FSMContext):
     """Возврат в главное меню"""
+    await state.clear()
     await callback.message.edit_text(
         "📍 Выберите нужный раздел:",
         reply_markup=get_main_menu_keyboard()

@@ -43,12 +43,18 @@ async def send_with_retry(coro, max_retries=3, delay=1):
     last_error = None
     for attempt in range(max_retries):
         try:
-            return await coro
+            return await asyncio.wait_for(coro, timeout=30)  # 30 сек таймаут
+        except asyncio.TimeoutError as e:
+            last_error = e
+            logger.warning(f"Таймаут, попытка {attempt + 1}/{max_retries}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(delay * (attempt + 1))
         except TelegramNetworkError as e:
             last_error = e
+            logger.warning(f"Сетевая ошибка, попытка {attempt + 1}/{max_retries}: {e}")
             if attempt < max_retries - 1:
-                logger.warning(f"Сетевая ошибка, попытка {attempt + 1}/{max_retries}: {e}")
                 await asyncio.sleep(delay * (attempt + 1))
+    logger.error(f"Все {max_retries} попытки исчерпаны")
     raise last_error
 
 # ========== НАЧАЛО ==========
@@ -313,17 +319,25 @@ async def process_photo(message: Message, state: FSMContext):
     if photo_id not in photos and len(photos) < 10:
         photos.append(photo_id)
         await state.update_data(photos=photos)
+    
+    # Удаляем предыдущее сообщение со счётчиком
+    photo_counter_msg_id = data.get('photo_counter_msg_id')
+    if photo_counter_msg_id:
+        try:
+            await message.bot.delete_message(message.chat.id, photo_counter_msg_id)
+        except: pass
+    
+    # Удаляем исходное сообщение с кнопкой "Пропустить"
     photo_prompt_msg_id = data.get('photo_prompt_msg_id')
     if photo_prompt_msg_id:
         try:
             await message.bot.delete_message(message.chat.id, photo_prompt_msg_id)
             await state.update_data(photo_prompt_msg_id=None)
         except: pass
+    
     from bot.keyboards.inline import get_photo_done_keyboard
     msg = await message.answer(f"📸 Загружено {len(photos)}/10 фото", reply_markup=get_photo_done_keyboard())
-    history = data.get('history_messages', [])
-    history.append(msg.message_id)
-    await state.update_data(history_messages=history)
+    await state.update_data(photo_counter_msg_id=msg.message_id)
 
 @router.callback_query(AdCreation.photos, F.data == "photos_skip")
 async def skip_photos(callback: CallbackQuery, state: FSMContext):
@@ -338,6 +352,7 @@ async def photos_done(callback: CallbackQuery, state: FSMContext):
     except: pass
     data = await state.get_data()
     photos_count = len(data.get('photos', []))
+    await state.update_data(photo_counter_msg_id=None)
     msg = await callback.message.answer(f"✅ <b>Фото:</b> {photos_count} шт.")
     history = data.get('history_messages', [])
     history.append(msg.message_id)
