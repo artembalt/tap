@@ -1,11 +1,11 @@
-# bot/main_debug.py - ДИАГНОСТИКА: логируем ВСЕ update'ы
+# bot/main.py
+"""Telegram бот - webhook режим с retry"""
 
 import asyncio
 import logging
 import sys
-import json
 from pathlib import Path
-from aiohttp import web, ClientTimeout
+from aiohttp import web, ClientTimeout, TCPConnector
 
 from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.types import Update, TelegramObject, Message, CallbackQuery
@@ -14,8 +14,8 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 from redis.asyncio import Redis
-from typing import Any, Awaitable, Callable, Dict
 
 sys.path.append(str(Path(__file__).parent.parent))
 
@@ -26,62 +26,119 @@ from bot.middlewares.antiflood import AntiFloodMiddleware
 from bot.middlewares.auth import AuthMiddleware
 from bot.utils.commands import set_bot_commands
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.FileHandler('logs/bot.log'), logging.StreamHandler()])
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.FileHandler('logs/bot.log'), logging.StreamHandler()]
+)
 logger = logging.getLogger(__name__)
 
 WEBHOOK_PATH = "/webhook/bot"
-WEBHOOK_URL = f"https://prodaybot.ru{WEBHOOK_PATH}"
+DOMAIN = "prodaybot.ru"
+WEBHOOK_URL = f"https://{DOMAIN}{WEBHOOK_PATH}"
+WEB_SERVER_HOST = "127.0.0.1"
+WEB_SERVER_PORT = 8080
+
+
+class RetryMiddleware(BaseMiddleware):
+    """Middleware для автоматического retry при сетевых ошибках"""
+    
+    async def __call__(self, handler, event: TelegramObject, data: dict):
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                return await handler(event, data)
+            except TelegramRetryAfter as e:
+                logger.warning(f"Rate limit, ждём {e.retry_after}с")
+                await asyncio.sleep(e.retry_after)
+            except TelegramNetworkError as e:
+                if attempt < max_retries - 1:
+                    delay = (attempt + 1) * 2
+                    logger.warning(f"Сетевая ошибка (попытка {attempt+1}/{max_retries}), повтор через {delay}с: {e}")
+                    await asyncio.sleep(delay)
+                else:
+                    logger.error(f"Все {max_retries} попытки исчерпаны: {e}")
+                    raise
 
 
 class RawUpdateLogger(BaseMiddleware):
-    """Логирует КАЖДЫЙ update ДО любой обработки"""
-    async def __call__(self, handler: Callable, event: TelegramObject, data: Dict[str, Any]) -> Any:
-        if isinstance(event, CallbackQuery):
-            logger.info(f"!!! RAW CALLBACK: data='{event.data}' from_user={event.from_user.id}")
-        elif isinstance(event, Message):
-            logger.info(f"!!! RAW MESSAGE: text='{event.text}' from_user={event.from_user.id}")
+    """Логирование входящих update"""
+    
+    async def __call__(self, handler, event: Update, data: dict):
+        if hasattr(event, 'message') and event.message:
+            logger.info(f"!!! RAW MESSAGE: text='{event.message.text}' from_user={event.message.from_user.id}")
+        elif hasattr(event, 'callback_query') and event.callback_query:
+            logger.info(f"!!! RAW CALLBACK: data='{event.callback_query.data}' from_user={event.callback_query.from_user.id}")
         return await handler(event, data)
 
 
 async def on_startup(bot: Bot):
     logger.info("=" * 60)
-    logger.info("ЗАПУСК ДИАГНОСТИЧЕСКОГО БОТА")
+    logger.info("ЗАПУСК БОТА")
     logger.info("=" * 60)
+    
     await init_db()
     await set_bot_commands(bot)
-    me = await bot.get_me()
-    logger.info(f"Бот: @{me.username}")
-    await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True, allowed_updates=["message", "callback_query"])
-    logger.info(f"Webhook: {WEBHOOK_URL}")
     
-    # Логируем все зарегистрированные handlers
-    logger.info("=== ЗАРЕГИСТРИРОВАННЫЕ CALLBACK HANDLERS ===")
-    for router in [start.router, ad_creation.router, ad_management.router]:
-        logger.info(f"Router '{router.name}': {len(router.callback_query.handlers)} callbacks")
-        for h in router.callback_query.handlers[:5]:
-            logger.info(f"  - {h.callback} filters: {h.filters}")
+    # Прогрев сессии
+    try:
+        me = await bot.get_me()
+        logger.info(f"Бот: @{me.username}")
+    except Exception as e:
+        logger.warning(f"Прогрев: {e}")
+    
+    await bot.set_webhook(
+        url=WEBHOOK_URL,
+        drop_pending_updates=True,
+        allowed_updates=["message", "callback_query"]
+    )
+    logger.info(f"Webhook: {WEBHOOK_URL}")
 
 
 async def on_shutdown(bot: Bot):
+    logger.info("Остановка бота...")
     await bot.delete_webhook()
 
 
 async def main():
-    redis = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=settings.REDIS_DB,
-                  password=settings.REDIS_PASSWORD or None, decode_responses=False)
+    redis = Redis(
+        host=settings.REDIS_HOST,
+        port=settings.REDIS_PORT,
+        db=settings.REDIS_DB,
+        password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None,
+        decode_responses=True
+    )
     storage = RedisStorage(redis=redis)
     
-    timeout = ClientTimeout(total=120, connect=30, sock_read=60, sock_connect=30)
-    session = AiohttpSession(timeout=timeout)
-    bot = Bot(token=settings.BOT_TOKEN, session=session, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    # Короткие таймауты + force_close для избежания проблем с keep-alive
+    timeout = ClientTimeout(
+        total=30,        # Максимум 30 секунд на всё
+        connect=10,      # 10 секунд на соединение
+        sock_read=20,    # 20 секунд на чтение
+        sock_connect=10  # 10 секунд на socket connect
+    )
+    
+    connector = TCPConnector(
+        limit=100,
+        limit_per_host=30,
+        force_close=True,    # Закрывать соединения после использования
+        enable_cleanup_closed=True
+    )
+    
+    session = AiohttpSession(timeout=timeout, connector=connector)
+    bot = Bot(
+        token=settings.BOT_TOKEN,
+        session=session,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
+    )
     
     dp = Dispatcher(storage=storage)
     
-    # ПЕРВЫМ ставим RawUpdateLogger - он логирует ВСЁ
-    dp.callback_query.outer_middleware(RawUpdateLogger())
-    dp.message.outer_middleware(RawUpdateLogger())
-    
+    # Middleware - порядок важен!
+    dp.update.outer_middleware(RawUpdateLogger())
+    dp.message.outer_middleware(RetryMiddleware())
+    dp.callback_query.outer_middleware(RetryMiddleware())
     dp.message.middleware(AntiFloodMiddleware())
     dp.callback_query.middleware(AntiFloodMiddleware())
     dp.message.middleware(AuthMiddleware())
@@ -99,16 +156,17 @@ async def main():
     dp.shutdown.register(on_shutdown)
     
     app = web.Application()
-    SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
+    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
     
+    logger.info(f"Сервер запущен на {WEB_SERVER_HOST}:{WEB_SERVER_PORT}")
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "127.0.0.1", 8080)
+    site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
     
     try:
         await site.start()
-        logger.info("Сервер запущен на 127.0.0.1:8080")
         await asyncio.Event().wait()
     finally:
         await runner.cleanup()
@@ -117,4 +175,7 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("Бот остановлен")
