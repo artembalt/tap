@@ -1,5 +1,5 @@
 # bot/handlers/ad_creation.py
-"""ДИАГНОСТИЧЕСКАЯ ВЕРСИЯ - максимум логирования"""
+"""ИСПРАВЛЕННАЯ ВЕРСИЯ - хэштеги, профиль продавца, оптимизация фото"""
 
 import logging
 import asyncio
@@ -22,7 +22,6 @@ from shared.regions_config import (
 logger = logging.getLogger(__name__)
 router = Router(name='ad_creation')
 
-# Логируем создание роутера
 logger.info("ad_creation.router создан")
 
 
@@ -74,18 +73,12 @@ async def ask_region(message: Message, state: FSMContext):
     logger.info("[REGION] сообщение отправлено")
 
 
-# ВАЖНО: Убрал фильтр по state!
 @router.callback_query(F.data.startswith("region_"))
 async def process_region(callback: CallbackQuery, state: FSMContext):
-    """Обработка выбора региона - БЕЗ ФИЛЬТРА ПО STATE"""
-    logger.info(f"[REGION] >>>>>>> process_region ВЫЗВАН! data={callback.data}, user={callback.from_user.id}")
-    
-    current_state = await state.get_state()
-    logger.info(f"[REGION] текущий state: {current_state}")
+    """Обработка выбора региона"""
+    logger.info(f"[REGION] process_region: data={callback.data}, user={callback.from_user.id}")
     
     region = callback.data.replace("region_", "")
-    logger.info(f"[REGION] выбран регион: {region}")
-    
     await state.update_data(region=region)
     
     try:
@@ -98,7 +91,6 @@ async def process_region(callback: CallbackQuery, state: FSMContext):
     
     await ask_city(callback.message, state, region)
     await callback.answer()
-    logger.info("[REGION] process_region завершён")
 
 
 # ========== ГОРОД ==========
@@ -361,24 +353,29 @@ async def process_condition(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ========== ФОТО ==========
+# ========== ФОТО (ИСПРАВЛЕНО - без лишних сообщений) ==========
 async def ask_photos(message: Message, state: FSMContext):
     logger.info("[PHOTOS] ask_photos")
     await state.set_state(AdCreation.photos)
-    await state.update_data(photos=[], processed_media_groups=[])
+    await state.update_data(photos=[], photo_msg_id=None)
     
     from bot.keyboards.inline import get_photo_skip_keyboard
-    await message.answer(
+    msg = await message.answer(
         "📸 <b>Шаг 9: Фото</b>\n\n"
-        "Отправьте фото (до 10 шт) или нажмите <b>Пропустить</b>.",
+        "Отправьте фото (до 10 шт) или нажмите <b>Пропустить</b>.\n"
+        "Загружено: 0/10",
         reply_markup=get_photo_skip_keyboard()
     )
+    # Сохраняем ID сообщения для обновления
+    await state.update_data(photo_msg_id=msg.message_id)
 
 
 @router.message(AdCreation.photos, F.photo)
 async def process_photo(message: Message, state: FSMContext):
+    """ИСПРАВЛЕНО: обновляем одно сообщение вместо отправки новых"""
     data = await state.get_data()
     photos = data.get("photos", [])
+    photo_msg_id = data.get("photo_msg_id")
     
     if len(photos) >= 10:
         return
@@ -388,11 +385,28 @@ async def process_photo(message: Message, state: FSMContext):
         photos.append(photo_id)
         await state.update_data(photos=photos)
     
+    count = len(photos)
+    
+    # Обновляем существующее сообщение вместо отправки нового
     from bot.keyboards.inline import get_photo_done_keyboard
-    await message.answer(
-        f"✅ Загружено {len(photos)}/10 фото.\nНажмите <b>Далее</b>.",
-        reply_markup=get_photo_done_keyboard()
-    )
+    try:
+        if photo_msg_id:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=photo_msg_id,
+                text=f"📸 <b>Шаг 9: Фото</b>\n\n"
+                     f"✅ Загружено: {count}/10 фото\n\n"
+                     f"Отправьте ещё или нажмите <b>Далее</b>.",
+                reply_markup=get_photo_done_keyboard()
+            )
+    except Exception as e:
+        logger.warning(f"[PHOTOS] Не удалось обновить сообщение: {e}")
+        # Fallback - отправляем новое сообщение только если не удалось обновить
+        msg = await message.answer(
+            f"✅ Загружено {count}/10 фото. Нажмите <b>Далее</b>.",
+            reply_markup=get_photo_done_keyboard()
+        )
+        await state.update_data(photo_msg_id=msg.message_id)
 
 
 @router.callback_query(F.data == "photos_skip")
@@ -402,6 +416,7 @@ async def skip_photos(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_reply_markup(reply_markup=None)
     except:
         pass
+    await callback.message.answer("✅ <b>Фото:</b> пропущено")
     await ask_video(callback.message, state)
     await callback.answer()
 
@@ -660,12 +675,21 @@ async def edit_ad_preview(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# ========== ПУБЛИКАЦИЯ В КАНАЛ (ИСПРАВЛЕНО) ==========
 async def publish_to_channel(bot, bot_info, ad, data) -> dict:
-    """Публикация в канал"""
+    """
+    Публикация в канал - ИСПРАВЛЕННАЯ ВЕРСИЯ
+    
+    Исправления:
+    1. Добавлены хэштеги города и категории
+    2. Добавлена ссылка на профиль продавца
+    """
     logger.info(f"[CHANNEL] publish, ad_id={ad.id}")
     
     region = data.get('region', '')
     category = data.get('category', '')
+    city = data.get('city', '')
+    subcategory = data.get('subcategory', '')
     
     channel_config = CHANNELS_CONFIG.get(region, {})
     category_channel = channel_config.get('categories', {}).get(category)
@@ -675,17 +699,47 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
         logger.warning(f"[CHANNEL] каналы не настроены для {region}")
         return {}
     
+    # ===== ИСПРАВЛЕНИЕ 1: Формируем хэштеги =====
+    hashtags = []
+    
+    # Хэштег рубрики (подкатегории)
+    if subcategory:
+        subcategory_hashtag = get_subcategory_hashtag(subcategory)
+        hashtags.append(subcategory_hashtag)
+    
+    # Хэштег категории + региона (например #Авто_Калининград)
+    if category and region:
+        category_name = CATEGORIES.get(category, category)
+        region_name = REGIONS.get(region, region)
+        # Убираем эмодзи и пробелы для хэштега
+        cat_clean = category_name.split()[-1] if ' ' in category_name else category_name
+        reg_clean = region_name.replace(' ', '_').replace('-', '_')
+        combined_hashtag = f"#{cat_clean}_{reg_clean}"
+        hashtags.append(combined_hashtag)
+    
+    # Хэштег города
+    if city:
+        city_hashtag = get_city_hashtag(city)
+        hashtags.append(city_hashtag)
+    
+    hashtags_text = " ".join(hashtags) if hashtags else ""
+    
+    # ===== ИСПРАВЛЕНИЕ 2: Текст объявления с ссылкой на профиль =====
     text = f"""<b>{data.get('title', '')}</b>
 
 {data.get('description', '')}
 
 💰 {data.get('price', 'Не указана')}
 
+{hashtags_text}
+
 ━━━━━━━━━━━━━━━
-📢 <a href="https://t.me/{bot_info.username}">Разместить объявление</a>
-😎 <a href="tg://user?id={ad.user_id}">Написать продавцу</a>"""
+😎 <a href="tg://user?id={ad.user_id}">Написать продавцу</a>
+👾 <a href="https://t.me/{bot_info.username}?start=profile_{ad.user_id}">Профиль продавца</a>
+📢 <a href="https://t.me/{bot_info.username}">Разместить объявление</a>"""
 
     photos = data.get('photos', [])
+    video = data.get('video')
     channel_ids = {}
     
     channels = []
@@ -705,8 +759,10 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
                         media.append(InputMediaPhoto(media=p))
                     msgs = await bot.send_media_group(chat_id=channel, media=media)
                     msg = msgs[0] if msgs else None
+            elif video:
+                msg = await bot.send_video(chat_id=channel, video=video, caption=text)
             else:
-                msg = await bot.send_message(chat_id=channel, text=text)
+                msg = await bot.send_message(chat_id=channel, text=text, disable_web_page_preview=True)
             
             if msg:
                 channel_ids[channel] = msg.message_id
