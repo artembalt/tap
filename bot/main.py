@@ -53,6 +53,13 @@ async def on_startup(bot: Bot):
     await init_db()
     await set_bot_commands(bot)
     
+    # Прогрев сессии - первый запрос устанавливает соединение
+    try:
+        me = await bot.get_me()
+        logger.info(f"Бот прогрет: @{me.username}")
+    except Exception as e:
+        logger.warning(f"Прогрев сессии: {e}")
+    
     await bot.set_webhook(
         url=WEBHOOK_URL,
         drop_pending_updates=True
