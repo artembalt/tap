@@ -1,5 +1,5 @@
 # bot/main.py
-"""Главный файл Telegram бота - с оптимизацией сети для российских VPS"""
+"""Telegram бот - webhook режим БЕЗ RetryMiddleware"""
 
 import asyncio
 import logging
@@ -21,12 +21,11 @@ sys.path.append(str(Path(__file__).parent.parent))
 from bot.config import settings
 from bot.database.connection import init_db
 from bot.handlers import (
-    start, ad_creation, ad_management, 
+    start, ad_creation, ad_management,
     search, profile, admin, payment
 )
 from bot.middlewares.antiflood import AntiFloodMiddleware
 from bot.middlewares.auth import AuthMiddleware
-from bot.middlewares.retry import RetryMiddleware
 from bot.utils.commands import set_bot_commands
 
 # Настройка логирования
@@ -47,39 +46,24 @@ WEBHOOK_URL = f"https://{DOMAIN}{WEBHOOK_PATH}"
 WEB_SERVER_HOST = "127.0.0.1"
 WEB_SERVER_PORT = 8080
 
+
 async def on_startup(bot: Bot):
     """Действия при запуске бота"""
     logger.info("Запуск webhook бота...")
     await init_db()
     await set_bot_commands(bot)
     
-    # Устанавливаем webhook
     await bot.set_webhook(
         url=WEBHOOK_URL,
         drop_pending_updates=True
     )
     logger.info(f"Webhook установлен: {WEBHOOK_URL}")
 
+
 async def on_shutdown(bot: Bot):
     """Действия при остановке бота"""
     logger.info("Остановка webhook бота...")
     await bot.delete_webhook()
-
-
-def create_optimized_session() -> AiohttpSession:
-    """
-    Создаёт оптимизированную сессию для работы с Telegram API.
-    Решает проблемы с нестабильной сетью на российских VPS.
-    """
-    # Короткие таймауты - лучше быстро получить ошибку и повторить
-    timeout = ClientTimeout(
-        total=30,           # Общий таймаут запроса
-        connect=10,         # Таймаут на установку соединения
-        sock_read=20,       # Таймаут на чтение данных
-        sock_connect=10     # Таймаут на socket connect
-    )
-    
-    return AiohttpSession(timeout=timeout)
 
 
 async def main():
@@ -96,10 +80,17 @@ async def main():
     
     storage = RedisStorage(redis=redis)
     
-    # Создаём оптимизированную сессию
-    session = create_optimized_session()
+    # Увеличенные таймауты - без RetryMiddleware нужно больше времени
+    timeout = ClientTimeout(
+        total=60,           # Общий таймаут
+        connect=15,         # На установку соединения  
+        sock_read=45,       # На чтение (важно для media)
+        sock_connect=15     # На socket connect
+    )
     
-    # Инициализация бота с кастомной сессией
+    session = AiohttpSession(timeout=timeout)
+    
+    # Инициализация бота
     bot = Bot(
         token=settings.BOT_TOKEN,
         session=session,
@@ -110,9 +101,7 @@ async def main():
     
     dp = Dispatcher(storage=storage)
     
-    # Регистрация middleware (RetryMiddleware первым - для перехвата сетевых ошибок)
-    dp.message.middleware(RetryMiddleware(max_retries=3, base_delay=1.0))
-    dp.callback_query.middleware(RetryMiddleware(max_retries=3, base_delay=1.0))
+    # Middleware - БЕЗ RetryMiddleware!
     dp.message.middleware(AntiFloodMiddleware())
     dp.callback_query.middleware(AntiFloodMiddleware())
     dp.message.middleware(AuthMiddleware())
@@ -149,7 +138,6 @@ async def main():
     
     try:
         await site.start()
-        # Держим сервер запущенным
         await asyncio.Event().wait()
     except Exception as e:
         logger.error(f"Ошибка сервера: {e}")
@@ -157,7 +145,7 @@ async def main():
     finally:
         await runner.cleanup()
         await bot.session.close()
-        await redis.close()
+        await redis.aclose()
 
 
 if __name__ == "__main__":
