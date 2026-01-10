@@ -186,6 +186,17 @@ def get_edit_preview_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_edit_options_keyboard(ad_id: str) -> InlineKeyboardMarkup:
+    """Клавиатура выбора что редактировать в объявлении"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="📝 Заголовок", callback_data=f"edit_title_{ad_id}")
+    builder.button(text="📄 Описание", callback_data=f"edit_description_{ad_id}")
+    builder.button(text="💰 Цена", callback_data=f"edit_price_{ad_id}")
+    builder.button(text="🔙 Назад", callback_data=f"view_my_ad_{ad_id}")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
 def get_phone_settings_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура настроек телефона"""
     builder = InlineKeyboardBuilder()

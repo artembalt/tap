@@ -1,5 +1,5 @@
 # bot/database/queries.py
-"""Запросы к базе данных"""
+"""Запросы к базе данных - ОПТИМИЗИРОВАННАЯ ВЕРСИЯ"""
 
 import logging
 from typing import Optional, List
@@ -180,10 +180,10 @@ class AdQueries:
     async def get_user_ads(
         telegram_id: int, 
         status: Optional[str] = None,
-        limit: int = 50,
+        limit: int = 10,  # УМЕНЬШЕНО с 50 до 10!
         offset: int = 0
     ) -> List[Ad]:
-        """Получить объявления пользователя"""
+        """Получить объявления пользователя с пагинацией"""
         try:
             async with get_db_session() as session:
                 stmt = select(Ad).where(Ad.user_id == telegram_id)
@@ -191,8 +191,12 @@ class AdQueries:
                 if status:
                     stmt = stmt.where(Ad.status == status)
                 else:
-                    # По умолчанию показываем только активные и на модерации
-                    stmt = stmt.where(Ad.status.in_([AdStatus.ACTIVE.value, AdStatus.PENDING.value]))
+                    # По умолчанию показываем активные, на модерации и архивные
+                    stmt = stmt.where(Ad.status.in_([
+                        AdStatus.ACTIVE.value, 
+                        AdStatus.PENDING.value,
+                        AdStatus.ARCHIVED.value
+                    ]))
                 
                 stmt = stmt.order_by(Ad.created_at.desc()).limit(limit).offset(offset)
                 
@@ -201,6 +205,33 @@ class AdQueries:
         except Exception as e:
             logger.error(f"Error getting user ads {telegram_id}: {e}")
             return []
+    
+    @staticmethod
+    async def get_user_ads_count(telegram_id: int) -> int:
+        """
+        Получить количество объявлений пользователя (быстрый запрос COUNT).
+        Используется для пагинации.
+        """
+        try:
+            async with get_db_session() as session:
+                stmt = (
+                    select(func.count(Ad.id))
+                    .where(
+                        and_(
+                            Ad.user_id == telegram_id,
+                            Ad.status.in_([
+                                AdStatus.ACTIVE.value, 
+                                AdStatus.PENDING.value,
+                                AdStatus.ARCHIVED.value
+                            ])
+                        )
+                    )
+                )
+                result = await session.execute(stmt)
+                return result.scalar() or 0
+        except Exception as e:
+            logger.error(f"Error counting user ads {telegram_id}: {e}")
+            return 0
     
     @staticmethod
     async def get_user_ads_count_today(telegram_id: int) -> int:
@@ -435,7 +466,7 @@ class FavoritesQueries:
             async with get_db_session() as session:
                 user = await session.get(User, user_id)
                 if user:
-                    return any(ad.id == ad_id for ad in user.favorites)
+                    return any(str(ad.id) == ad_id for ad in user.favorites)
         except Exception as e:
             logger.error(f"Error checking favorites: {e}")
         return False

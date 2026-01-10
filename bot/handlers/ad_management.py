@@ -1,5 +1,5 @@
 # bot/handlers/ad_management.py
-"""Обработчик управления объявлениями пользователя"""
+"""Обработчик управления объявлениями пользователя - ОПТИМИЗИРОВАННАЯ ВЕРСИЯ"""
 
 import logging
 from aiogram import Router, F
@@ -20,6 +20,9 @@ from shared.regions_config import REGIONS, CATEGORIES
 router = Router(name='ad_management')
 logger = logging.getLogger(__name__)
 
+# Лимит объявлений на странице (было 50!)
+ADS_PER_PAGE = 5
+
 # =============================================================================
 # FSM STATES
 # =============================================================================
@@ -38,39 +41,78 @@ class EditAdStates(StatesGroup):
 @router.message(F.text == "📋 Мои объявления")
 async def my_ads(message: Message):
     """Показать список объявлений пользователя"""
-    await show_user_ads(message, message.from_user.id)
+    await show_user_ads(message, message.from_user.id, page=0)
 
 @router.callback_query(F.data == "my_ads")
 async def callback_my_ads(callback: CallbackQuery):
     """Показать список объявлений пользователя (через callback)"""
-    await show_user_ads(callback.message, callback.from_user.id, edit=True)
+    await show_user_ads(callback.message, callback.from_user.id, edit=True, page=0)
     await callback.answer()
 
-async def show_user_ads(message: Message, user_id: int, edit: bool = False):
-    """Вспомогательная функция для показа объявлений"""
-    # Получаем объявления пользователя
-    ads = await AdQueries.get_user_ads(user_id, limit=50)
-    
-    if not ads:
-        text = "📋 <b>Ваши объявления</b>\n\n" \
-               "У вас пока нет объявлений.\n" \
-               "Создайте своё первое объявление!"
+@router.callback_query(F.data.startswith("my_ads_page_"))
+async def callback_my_ads_page(callback: CallbackQuery):
+    """Пагинация списка объявлений"""
+    page = int(callback.data.replace("my_ads_page_", ""))
+    await show_user_ads(callback.message, callback.from_user.id, edit=True, page=page)
+    await callback.answer()
+
+async def show_user_ads(message: Message, user_id: int, edit: bool = False, page: int = 0):
+    """
+    Вспомогательная функция для показа объявлений.
+    ОПТИМИЗИРОВАНО: limit=5, пагинация, компактный текст.
+    """
+    try:
+        # Получаем объявления пользователя с пагинацией
+        # ВАЖНО: limit уменьшен с 50 до 5!
+        ads = await AdQueries.get_user_ads(
+            user_id, 
+            limit=ADS_PER_PAGE, 
+            offset=page * ADS_PER_PAGE
+        )
         
+        # Получаем общее количество для пагинации (отдельный быстрый запрос)
+        total_count = await AdQueries.get_user_ads_count(user_id)
+        
+    except Exception as e:
+        logger.error(f"Ошибка получения объявлений: {e}")
+        text = "❌ Ошибка загрузки объявлений. Попробуйте позже."
         if edit:
-            # Проверяем тип сообщения
-            if message.photo:
-                await message.delete()
-                await message.answer(text, reply_markup=get_back_keyboard())
-            else:
+            try:
                 await message.edit_text(text, reply_markup=get_back_keyboard())
+            except:
+                await message.answer(text, reply_markup=get_back_keyboard())
         else:
             await message.answer(text, reply_markup=get_back_keyboard())
         return
     
-    # Формируем список объявлений
-    text = f"📋 <b>Ваши объявления</b> ({len(ads)})\n\n"
+    if not ads and page == 0:
+        text = (
+            "📋 <b>Ваши объявления</b>\n\n"
+            "У вас пока нет объявлений.\n"
+            "Создайте своё первое объявление!"
+        )
+        
+        if edit:
+            if message.photo:
+                await message.delete()
+                await message.answer(text, reply_markup=get_back_keyboard())
+            else:
+                try:
+                    await message.edit_text(text, reply_markup=get_back_keyboard())
+                except:
+                    await message.answer(text, reply_markup=get_back_keyboard())
+        else:
+            await message.answer(text, reply_markup=get_back_keyboard())
+        return
     
-    for i, ad in enumerate(ads, 1):
+    # Формируем КОМПАКТНЫЙ список объявлений
+    total_pages = (total_count + ADS_PER_PAGE - 1) // ADS_PER_PAGE
+    text = f"📋 <b>Ваши объявления</b> ({total_count})\n"
+    if total_pages > 1:
+        text += f"📄 Страница {page + 1} из {total_pages}\n"
+    text += "\n"
+    
+    for i, ad in enumerate(ads, 1 + page * ADS_PER_PAGE):
         status_emoji = {
             "active": "✅",
             "pending": "⏳",
@@ -78,21 +120,64 @@ async def show_user_ads(message: Message, user_id: int, edit: bool = False):
             "rejected": "❌"
         }.get(ad.status, "❓")
         
-        text += f"{i}. {status_emoji} <b>{ad.title}</b>\n"
-        text += f"   💰 {ad.price} ₽ | 👁 {ad.views_count} | "
-        text += f"📂 {CATEGORIES.get(ad.category, ad.category)}\n\n"
+        # Компактный формат - без лишних полей
+        title = ad.title[:25] + "..." if len(ad.title) > 25 else ad.title
+        price_text = f"{int(ad.price):,}₽".replace(",", " ") if ad.price else "Договорная"
+        
+        text += f"{i}. {status_emoji} <b>{title}</b>\n"
+        text += f"   💰 {price_text} | 👁 {ad.views_count}\n\n"
     
-    text += "Нажмите на объявление, чтобы управлять им:"
+    text += "👆 Нажмите на объявление для управления"
+    
+    # Клавиатура с пагинацией
+    keyboard = get_user_ads_keyboard_paginated(ads, page, total_pages)
     
     if edit:
-        # Проверяем тип сообщения
         if message.photo:
             await message.delete()
-            await message.answer(text, reply_markup=get_user_ads_keyboard(ads))
+            await message.answer(text, reply_markup=keyboard)
         else:
-            await message.edit_text(text, reply_markup=get_user_ads_keyboard(ads))
+            try:
+                await message.edit_text(text, reply_markup=keyboard)
+            except:
+                await message.answer(text, reply_markup=keyboard)
     else:
-        await message.answer(text, reply_markup=get_user_ads_keyboard(ads))
+        await message.answer(text, reply_markup=keyboard)
+
+
+def get_user_ads_keyboard_paginated(ads: list, page: int, total_pages: int):
+    """Клавиатура со списком объявлений и пагинацией"""
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    from aiogram.utils.keyboard import InlineKeyboardBuilder
+    
+    builder = InlineKeyboardBuilder()
+    
+    # Кнопки объявлений (максимум 5)
+    for ad in ads[:ADS_PER_PAGE]:
+        title = ad.title[:25] + "..." if len(ad.title) > 25 else ad.title
+        builder.button(text=f"📌 {title}", callback_data=f"view_my_ad_{ad.id}")
+    
+    # Кнопки пагинации
+    if total_pages > 1:
+        pagination_buttons = []
+        if page > 0:
+            pagination_buttons.append(
+                InlineKeyboardButton(text="⬅️", callback_data=f"my_ads_page_{page - 1}")
+            )
+        pagination_buttons.append(
+            InlineKeyboardButton(text=f"{page + 1}/{total_pages}", callback_data="noop")
+        )
+        if page < total_pages - 1:
+            pagination_buttons.append(
+                InlineKeyboardButton(text="➡️", callback_data=f"my_ads_page_{page + 1}")
+            )
+        builder.row(*pagination_buttons)
+    
+    builder.button(text="🔙 Главное меню", callback_data="back_to_menu")
+    builder.adjust(1)  # Все кнопки в один столбец
+    
+    return builder.as_markup()
+
 
 # =============================================================================
 # ПРОСМОТР ДЕТАЛИ ОБЪЯВЛЕНИЯ
@@ -103,7 +188,12 @@ async def view_my_ad_detail(callback: CallbackQuery):
     """Просмотр деталей своего объявления"""
     ad_id = callback.data.replace("view_my_ad_", "")
     
-    ad = await AdQueries.get_ad(ad_id)
+    try:
+        ad = await AdQueries.get_ad(ad_id)
+    except Exception as e:
+        logger.error(f"Ошибка получения объявления {ad_id}: {e}")
+        await callback.answer("❌ Ошибка загрузки", show_alert=True)
+        return
     
     if not ad:
         await callback.answer("❌ Объявление не найдено", show_alert=True)
@@ -114,24 +204,67 @@ async def view_my_ad_detail(callback: CallbackQuery):
         await callback.answer("❌ Это не ваше объявление", show_alert=True)
         return
     
-    # Формируем текст объявления
-    text = format_ad_detail(ad)
+    # Формируем КОМПАКТНЫЙ текст объявления
+    text = format_ad_detail_compact(ad)
     
     # Если есть фото, отправляем с фото
     if ad.photos and len(ad.photos) > 0:
-        await callback.message.delete()
+        try:
+            await callback.message.delete()
+        except:
+            pass
         await callback.message.answer_photo(
             photo=ad.photos[0],
             caption=text,
-            reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True)
+            reply_markup=get_ad_actions_keyboard(str(ad.id), is_owner=True)
         )
     else:
-        await callback.message.edit_text(
-            text,
-            reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True)
-        )
+        try:
+            await callback.message.edit_text(
+                text,
+                reply_markup=get_ad_actions_keyboard(str(ad.id), is_owner=True)
+            )
+        except:
+            await callback.message.answer(
+                text,
+                reply_markup=get_ad_actions_keyboard(str(ad.id), is_owner=True)
+            )
     
     await callback.answer()
+
+
+def format_ad_detail_compact(ad) -> str:
+    """Компактное форматирование объявления (для быстрой отправки)"""
+    status_emoji = {
+        "active": "✅ Активно",
+        "pending": "⏳ На модерации",
+        "archived": "📦 В архиве",
+        "rejected": "❌ Отклонено"
+    }.get(ad.status, "❓")
+    
+    price_text = f"{int(ad.price):,} ₽".replace(",", " ") if ad.price else "Договорная"
+    region_name = REGIONS.get(ad.region, ad.region or "")
+    category_name = CATEGORIES.get(ad.category, ad.category or "")
+    
+    # Ограничиваем описание
+    description = ad.description or ""
+    if len(description) > 200:
+        description = description[:200] + "..."
+    
+    text = f"""<b>{ad.title}</b>
+
+{description}
+
+💰 {price_text}
+📍 {region_name}
+📂 {category_name}
+📊 {status_emoji}
+
+👁 Просмотров: {ad.views_count}
+⭐ В избранном: {ad.favorites_count}"""
+    
+    return text
+
 
 # =============================================================================
 # РЕДАКТИРОВАНИЕ ОБЪЯВЛЕНИЯ
@@ -142,36 +275,44 @@ async def start_edit_ad(callback: CallbackQuery, state: FSMContext):
     """Начать редактирование объявления"""
     ad_id = callback.data.replace("edit_ad_", "")
     
-    ad = await AdQueries.get_ad(ad_id)
+    try:
+        ad = await AdQueries.get_ad(ad_id)
+    except Exception as e:
+        logger.error(f"Ошибка получения объявления: {e}")
+        await callback.answer("❌ Ошибка загрузки", show_alert=True)
+        return
     
     if not ad or ad.user_id != callback.from_user.id:
         await callback.answer("❌ Объявление не найдено", show_alert=True)
         return
     
-    # Сохраняем ID объявления в состояние
     await state.update_data(editing_ad_id=ad_id)
     
-    text = f"""
-📝 <b>Редактирование объявления</b>
+    # Компактный текст
+    desc_preview = ad.description[:50] + "..." if len(ad.description) > 50 else ad.description
+    price_text = f"{int(ad.price):,} ₽".replace(",", " ") if ad.price else "Договорная"
+    
+    text = f"""📝 <b>Редактирование</b>
 
-<b>Текущие данные:</b>
-📌 Заголовок: {ad.title}
-📄 Описание: {ad.description[:100]}...
-💰 Цена: {ad.price} ₽
+📌 {ad.title}
+📄 {desc_preview}
+💰 {price_text}
 
-<b>Что вы хотите изменить?</b>
-"""
+Что изменить?"""
     
     from bot.keyboards.inline import get_edit_options_keyboard
     
-    # Проверяем есть ли фото в текущем сообщении
     if callback.message.photo:
         await callback.message.delete()
         await callback.message.answer(text, reply_markup=get_edit_options_keyboard(ad_id))
     else:
-        await callback.message.edit_text(text, reply_markup=get_edit_options_keyboard(ad_id))
+        try:
+            await callback.message.edit_text(text, reply_markup=get_edit_options_keyboard(ad_id))
+        except:
+            await callback.message.answer(text, reply_markup=get_edit_options_keyboard(ad_id))
     
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("edit_title_"))
 async def edit_ad_title(callback: CallbackQuery, state: FSMContext):
@@ -180,51 +321,43 @@ async def edit_ad_title(callback: CallbackQuery, state: FSMContext):
     await state.update_data(editing_ad_id=ad_id)
     await state.set_state(EditAdStates.waiting_for_new_title)
     
-    text = (
-        "📝 <b>Введите новый заголовок</b>\n\n"
-        "Максимум 100 символов.\n"
-        "Или отправьте /cancel для отмены."
-    )
+    text = "📝 Введите новый заголовок (до 100 символов):"
     
-    # Проверяем есть ли фото в текущем сообщении
     if callback.message.photo:
         await callback.message.delete()
         await callback.message.answer(text)
     else:
-        await callback.message.edit_text(text)
+        try:
+            await callback.message.edit_text(text)
+        except:
+            await callback.message.answer(text)
     
     await callback.answer()
+
 
 @router.message(EditAdStates.waiting_for_new_title)
 async def process_new_title(message: Message, state: FSMContext):
     """Обработка нового заголовка"""
     if len(message.text) > 100:
-        await message.answer("❌ Заголовок слишком длинный. Максимум 100 символов.")
+        await message.answer("❌ Максимум 100 символов")
         return
     
     data = await state.get_data()
     ad_id = data.get("editing_ad_id")
     
-    success = await AdQueries.update_ad(ad_id, title=message.text)
+    try:
+        success = await AdQueries.update_ad(ad_id, title=message.text)
+    except Exception as e:
+        logger.error(f"Ошибка обновления: {e}")
+        await message.answer("❌ Ошибка сохранения")
+        return
     
     if success:
-        await message.answer("✅ Заголовок успешно обновлён!")
+        await message.answer("✅ Заголовок обновлён!")
         await state.clear()
-        
-        # Показываем обновлённое объявление
-        ad = await AdQueries.get_ad(ad_id)
-        if ad:
-            text = format_ad_detail(ad)
-            if ad.photos and len(ad.photos) > 0:
-                await message.answer_photo(
-                    photo=ad.photos[0],
-                    caption=text,
-                    reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True)
-                )
-            else:
-                await message.answer(text, reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True))
     else:
-        await message.answer("❌ Ошибка при обновлении заголовка")
+        await message.answer("❌ Ошибка обновления")
+
 
 @router.callback_query(F.data.startswith("edit_description_"))
 async def edit_ad_description(callback: CallbackQuery, state: FSMContext):
@@ -233,50 +366,43 @@ async def edit_ad_description(callback: CallbackQuery, state: FSMContext):
     await state.update_data(editing_ad_id=ad_id)
     await state.set_state(EditAdStates.waiting_for_new_description)
     
-    text = (
-        "📄 <b>Введите новое описание</b>\n\n"
-        "Максимум 1000 символов.\n"
-        "Или отправьте /cancel для отмены."
-    )
+    text = "📄 Введите новое описание (до 1000 символов):"
     
-    # Проверяем есть ли фото в текущем сообщении
     if callback.message.photo:
         await callback.message.delete()
         await callback.message.answer(text)
     else:
-        await callback.message.edit_text(text)
+        try:
+            await callback.message.edit_text(text)
+        except:
+            await callback.message.answer(text)
     
     await callback.answer()
+
 
 @router.message(EditAdStates.waiting_for_new_description)
 async def process_new_description(message: Message, state: FSMContext):
     """Обработка нового описания"""
     if len(message.text) > 1000:
-        await message.answer("❌ Описание слишком длинное. Максимум 1000 символов.")
+        await message.answer("❌ Максимум 1000 символов")
         return
     
     data = await state.get_data()
     ad_id = data.get("editing_ad_id")
     
-    success = await AdQueries.update_ad(ad_id, description=message.text)
+    try:
+        success = await AdQueries.update_ad(ad_id, description=message.text)
+    except Exception as e:
+        logger.error(f"Ошибка обновления: {e}")
+        await message.answer("❌ Ошибка сохранения")
+        return
     
     if success:
-        await message.answer("✅ Описание успешно обновлено!")
+        await message.answer("✅ Описание обновлено!")
         await state.clear()
-        
-        ad = await AdQueries.get_ad(ad_id)
-        if ad:
-            text = format_ad_detail(ad)
-            if ad.photos and len(ad.photos) > 0:
-                await message.answer_photo(
-                    photo=ad.photos[0],
-                    caption=text,
-                    reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True)
-                )
-            else:
-                await message.answer(text, reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True))
     else:
-        await message.answer("❌ Ошибка при обновлении описания")
+        await message.answer("❌ Ошибка обновления")
+
 
 @router.callback_query(F.data.startswith("edit_price_"))
 async def edit_ad_price(callback: CallbackQuery, state: FSMContext):
@@ -285,55 +411,48 @@ async def edit_ad_price(callback: CallbackQuery, state: FSMContext):
     await state.update_data(editing_ad_id=ad_id)
     await state.set_state(EditAdStates.waiting_for_new_price)
     
-    text = (
-        "💰 <b>Введите новую цену</b>\n\n"
-        "Только число в рублях.\n"
-        "Или отправьте /cancel для отмены."
-    )
+    text = "💰 Введите новую цену (число в рублях):"
     
-    # Проверяем есть ли фото в текущем сообщении
     if callback.message.photo:
         await callback.message.delete()
         await callback.message.answer(text)
     else:
-        await callback.message.edit_text(text)
+        try:
+            await callback.message.edit_text(text)
+        except:
+            await callback.message.answer(text)
     
     await callback.answer()
+
 
 @router.message(EditAdStates.waiting_for_new_price)
 async def process_new_price(message: Message, state: FSMContext):
     """Обработка новой цены"""
     try:
-        price = float(message.text)
+        price = float(message.text.replace(" ", "").replace(",", "."))
         if price < 0:
             await message.answer("❌ Цена не может быть отрицательной")
             return
     except ValueError:
-        await message.answer("❌ Введите корректную цену (только число)")
+        await message.answer("❌ Введите число")
         return
     
     data = await state.get_data()
     ad_id = data.get("editing_ad_id")
     
-    success = await AdQueries.update_ad(ad_id, price=price)
+    try:
+        success = await AdQueries.update_ad(ad_id, price=price)
+    except Exception as e:
+        logger.error(f"Ошибка обновления: {e}")
+        await message.answer("❌ Ошибка сохранения")
+        return
     
     if success:
-        await message.answer("✅ Цена успешно обновлена!")
+        await message.answer("✅ Цена обновлена!")
         await state.clear()
-        
-        ad = await AdQueries.get_ad(ad_id)
-        if ad:
-            text = format_ad_detail(ad)
-            if ad.photos and len(ad.photos) > 0:
-                await message.answer_photo(
-                    photo=ad.photos[0],
-                    caption=text,
-                    reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True)
-                )
-            else:
-                await message.answer(text, reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True))
     else:
-        await message.answer("❌ Ошибка при обновлении цены")
+        await message.answer("❌ Ошибка обновления")
+
 
 # =============================================================================
 # ДЕАКТИВАЦИЯ/АКТИВАЦИЯ ОБЪЯВЛЕНИЯ
@@ -344,53 +463,61 @@ async def deactivate_ad(callback: CallbackQuery):
     """Деактивировать объявление (в архив)"""
     ad_id = callback.data.replace("deactivate_ad_", "")
     
-    ad = await AdQueries.get_ad(ad_id)
-    if not ad or ad.user_id != callback.from_user.id:
-        await callback.answer("❌ Объявление не найдено", show_alert=True)
+    try:
+        ad = await AdQueries.get_ad(ad_id)
+        if not ad or ad.user_id != callback.from_user.id:
+            await callback.answer("❌ Объявление не найдено", show_alert=True)
+            return
+        
+        success = await AdQueries.deactivate_ad(ad_id)
+    except Exception as e:
+        logger.error(f"Ошибка деактивации: {e}")
+        await callback.answer("❌ Ошибка", show_alert=True)
         return
     
-    success = await AdQueries.deactivate_ad(ad_id)
-    
     if success:
-        await callback.answer("✅ Объявление отправлено в архив", show_alert=True)
+        await callback.answer("✅ В архив", show_alert=True)
+        text = "📦 Объявление в архиве"
         
-        text = (
-            "📦 Объявление перемещено в архив.\n"
-            "Вы можете активировать его снова в любое время."
-        )
-        
-        # Проверяем есть ли фото в текущем сообщении
         if callback.message.photo:
             await callback.message.delete()
             await callback.message.answer(text, reply_markup=get_back_keyboard())
         else:
-            await callback.message.edit_text(text, reply_markup=get_back_keyboard())
+            try:
+                await callback.message.edit_text(text, reply_markup=get_back_keyboard())
+            except:
+                await callback.message.answer(text, reply_markup=get_back_keyboard())
     else:
-        await callback.answer("❌ Ошибка при деактивации", show_alert=True)
+        await callback.answer("❌ Ошибка", show_alert=True)
+
 
 @router.callback_query(F.data.startswith("activate_ad_"))
 async def activate_ad(callback: CallbackQuery):
     """Активировать объявление"""
     ad_id = callback.data.replace("activate_ad_", "")
     
-    ad = await AdQueries.get_ad(ad_id)
-    if not ad or ad.user_id != callback.from_user.id:
-        await callback.answer("❌ Объявление не найдено", show_alert=True)
+    try:
+        ad = await AdQueries.get_ad(ad_id)
+        if not ad or ad.user_id != callback.from_user.id:
+            await callback.answer("❌ Объявление не найдено", show_alert=True)
+            return
+        
+        success = await AdQueries.activate_ad(ad_id)
+    except Exception as e:
+        logger.error(f"Ошибка активации: {e}")
+        await callback.answer("❌ Ошибка", show_alert=True)
         return
     
-    success = await AdQueries.activate_ad(ad_id)
-    
     if success:
-        await callback.answer("✅ Объявление активировано", show_alert=True)
+        await callback.answer("✅ Активировано", show_alert=True)
         # Показываем обновлённое объявление
-        ad = await AdQueries.get_ad(ad_id)  # Перезагружаем объявление
+        ad = await AdQueries.get_ad(ad_id)
         if ad:
-            text = format_ad_detail(ad)
+            text = format_ad_detail_compact(ad)
             
-            # Проверяем есть ли фото в текущем сообщении
             if callback.message.photo:
                 await callback.message.delete()
-                if ad.photos and len(ad.photos) > 0:
+                if ad.photos:
                     await callback.message.answer_photo(
                         photo=ad.photos[0],
                         caption=text,
@@ -399,9 +526,13 @@ async def activate_ad(callback: CallbackQuery):
                 else:
                     await callback.message.answer(text, reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True))
             else:
-                await callback.message.edit_text(text, reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True))
+                try:
+                    await callback.message.edit_text(text, reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True))
+                except:
+                    await callback.message.answer(text, reply_markup=get_ad_actions_keyboard(ad_id, is_owner=True))
     else:
-        await callback.answer("❌ Ошибка при активации", show_alert=True)
+        await callback.answer("❌ Ошибка", show_alert=True)
+
 
 # =============================================================================
 # УДАЛЕНИЕ ОБЪЯВЛЕНИЯ
@@ -412,76 +543,85 @@ async def confirm_delete_ad(callback: CallbackQuery):
     """Подтверждение удаления объявления"""
     ad_id = callback.data.replace("delete_ad_", "")
     
-    ad = await AdQueries.get_ad(ad_id)
-    if not ad or ad.user_id != callback.from_user.id:
-        await callback.answer("❌ Объявление не найдено", show_alert=True)
+    try:
+        ad = await AdQueries.get_ad(ad_id)
+        if not ad or ad.user_id != callback.from_user.id:
+            await callback.answer("❌ Объявление не найдено", show_alert=True)
+            return
+    except Exception as e:
+        logger.error(f"Ошибка: {e}")
+        await callback.answer("❌ Ошибка", show_alert=True)
         return
     
-    text = (
-        f"⚠️ <b>Вы уверены?</b>\n\n"
-        f"Объявление '<b>{ad.title}</b>' будет удалено.\n"
-        f"Это действие нельзя отменить!"
-    )
+    title = ad.title[:30] + "..." if len(ad.title) > 30 else ad.title
+    text = f"⚠️ Удалить '<b>{title}</b>'?\n\nЭто действие нельзя отменить!"
     
-    # Проверяем есть ли фото в текущем сообщении
     if callback.message.photo:
-        # Если есть фото, удаляем сообщение и отправляем новое
         await callback.message.delete()
-        await callback.message.answer(
-            text,
-            reply_markup=get_confirm_delete_keyboard(ad_id)
-        )
+        await callback.message.answer(text, reply_markup=get_confirm_delete_keyboard(ad_id))
     else:
-        # Если нет фото, просто редактируем текст
-        await callback.message.edit_text(
-            text,
-            reply_markup=get_confirm_delete_keyboard(ad_id)
-        )
+        try:
+            await callback.message.edit_text(text, reply_markup=get_confirm_delete_keyboard(ad_id))
+        except:
+            await callback.message.answer(text, reply_markup=get_confirm_delete_keyboard(ad_id))
     
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("confirm_delete_"))
 async def delete_ad(callback: CallbackQuery):
     """Удалить объявление"""
     ad_id = callback.data.replace("confirm_delete_", "")
     
-    ad = await AdQueries.get_ad(ad_id)
-    if not ad or ad.user_id != callback.from_user.id:
-        await callback.answer("❌ Объявление не найдено", show_alert=True)
+    try:
+        ad = await AdQueries.get_ad(ad_id)
+        if not ad or ad.user_id != callback.from_user.id:
+            await callback.answer("❌ Объявление не найдено", show_alert=True)
+            return
+        
+        success = await AdQueries.delete_ad(ad_id)
+    except Exception as e:
+        logger.error(f"Ошибка удаления: {e}")
+        await callback.answer("❌ Ошибка", show_alert=True)
         return
     
-    success = await AdQueries.delete_ad(ad_id)
-    
     if success:
-        await callback.answer("✅ Объявление удалено", show_alert=True)
+        await callback.answer("✅ Удалено", show_alert=True)
+        text = "🗑 Объявление удалено"
         
-        text = (
-            "🗑 <b>Объявление удалено</b>\n\n"
-            "Объявление больше не отображается в каталоге."
-        )
-        
-        # Проверяем есть ли фото в текущем сообщении
         if callback.message.photo:
             await callback.message.delete()
             await callback.message.answer(text, reply_markup=get_back_keyboard())
         else:
-            await callback.message.edit_text(text, reply_markup=get_back_keyboard())
+            try:
+                await callback.message.edit_text(text, reply_markup=get_back_keyboard())
+            except:
+                await callback.message.answer(text, reply_markup=get_back_keyboard())
     else:
-        await callback.answer("❌ Ошибка при удалении", show_alert=True)
+        await callback.answer("❌ Ошибка удаления", show_alert=True)
+
 
 @router.callback_query(F.data == "cancel_delete")
 async def cancel_delete(callback: CallbackQuery):
     """Отмена удаления"""
-    await callback.answer("Удаление отменено")
+    await callback.answer("Отменено")
+    text = "❌ Удаление отменено"
     
-    text = "Удаление отменено"
-    
-    # Проверяем есть ли фото в текущем сообщении
     if callback.message.photo:
         await callback.message.delete()
         await callback.message.answer(text, reply_markup=get_back_keyboard())
     else:
-        await callback.message.edit_text(text, reply_markup=get_back_keyboard())
+        try:
+            await callback.message.edit_text(text, reply_markup=get_back_keyboard())
+        except:
+            await callback.message.answer(text, reply_markup=get_back_keyboard())
+
+
+@router.callback_query(F.data == "noop")
+async def noop_handler(callback: CallbackQuery):
+    """Пустой обработчик для кнопок без действия (например, номер страницы)"""
+    await callback.answer()
+
 
 # =============================================================================
 # ОТМЕНА РЕДАКТИРОВАНИЯ
@@ -493,6 +633,6 @@ async def cancel_editing(message: Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state:
         await state.clear()
-        await message.answer("❌ Редактирование отменено", reply_markup=get_back_keyboard())
+        await message.answer("❌ Отменено", reply_markup=get_back_keyboard())
     else:
         await message.answer("Нечего отменять")
