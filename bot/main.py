@@ -1,5 +1,5 @@
 # bot/main.py
-"""Telegram бот - webhook режим БЕЗ RetryMiddleware"""
+"""Telegram бот - webhook режим с улучшенной обработкой сетевых ошибок"""
 
 import asyncio
 import logging
@@ -13,6 +13,7 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 from redis.asyncio import Redis
 
 # Добавляем корневую директорию в путь
@@ -26,6 +27,7 @@ from bot.handlers import (
 )
 from bot.middlewares.antiflood import AntiFloodMiddleware
 from bot.middlewares.auth import AuthMiddleware
+from bot.middlewares.retry import RetryMiddleware
 from bot.utils.commands import set_bot_commands
 
 # Настройка логирования
@@ -54,23 +56,50 @@ async def on_startup(bot: Bot):
     await set_bot_commands(bot)
     
     # Прогрев сессии - первый запрос устанавливает соединение
-    try:
-        me = await bot.get_me()
-        logger.info(f"Бот прогрет: @{me.username}")
-    except Exception as e:
-        logger.warning(f"Прогрев сессии: {e}")
+    for attempt in range(3):
+        try:
+            me = await bot.get_me()
+            logger.info(f"Бот прогрет: @{me.username}")
+            break
+        except TelegramNetworkError as e:
+            logger.warning(f"Прогрев сессии, попытка {attempt + 1}: {e}")
+            await asyncio.sleep(2)
     
-    await bot.set_webhook(
-        url=WEBHOOK_URL,
-        drop_pending_updates=True
-    )
-    logger.info(f"Webhook установлен: {WEBHOOK_URL}")
+    # Установка webhook с retry
+    for attempt in range(3):
+        try:
+            await bot.set_webhook(
+                url=WEBHOOK_URL,
+                drop_pending_updates=True
+            )
+            logger.info(f"Webhook установлен: {WEBHOOK_URL}")
+            break
+        except TelegramNetworkError as e:
+            logger.warning(f"Установка webhook, попытка {attempt + 1}: {e}")
+            await asyncio.sleep(2)
 
 
 async def on_shutdown(bot: Bot):
     """Действия при остановке бота"""
     logger.info("Остановка webhook бота...")
-    await bot.delete_webhook()
+    try:
+        await bot.delete_webhook()
+    except Exception as e:
+        logger.warning(f"Ошибка удаления webhook: {e}")
+
+
+async def error_handler(update, exception):
+    """Глобальный обработчик ошибок"""
+    if isinstance(exception, TelegramNetworkError):
+        logger.warning(f"Сетевая ошибка Telegram: {exception}")
+        return True  # Ошибка обработана
+    elif isinstance(exception, TelegramRetryAfter):
+        logger.warning(f"Rate limit, ждём {exception.retry_after} сек")
+        await asyncio.sleep(exception.retry_after)
+        return True
+    else:
+        logger.error(f"Необработанная ошибка: {exception}", exc_info=True)
+        return True  # Не падаем на ошибках
 
 
 async def main():
@@ -87,12 +116,12 @@ async def main():
     
     storage = RedisStorage(redis=redis)
     
-    # Короткие таймауты - лучше быстро получить ошибку
+    # УВЕЛИЧЕННЫЕ таймауты для нестабильной сети российских VPS
     timeout = ClientTimeout(
-        total=20,           # Общий таймаут
-        connect=5,          # На установку соединения  
-        sock_read=15,       # На чтение
-        sock_connect=5      # На socket connect
+        total=60,           # Общий таймаут (было 20)
+        connect=15,         # На установку соединения (было 5)
+        sock_read=45,       # На чтение (было 15)
+        sock_connect=15     # На socket connect (было 5)
     )
     
     session = AiohttpSession(timeout=timeout)
@@ -108,7 +137,12 @@ async def main():
     
     dp = Dispatcher(storage=storage)
     
-    # Middleware - БЕЗ RetryMiddleware!
+    # Регистрация глобального обработчика ошибок
+    dp.errors.register(error_handler)
+    
+    # Middleware - RetryMiddleware ПЕРВЫМ для обработки сетевых ошибок
+    dp.message.middleware(RetryMiddleware(max_retries=3, base_delay=1.0))
+    dp.callback_query.middleware(RetryMiddleware(max_retries=3, base_delay=1.0))
     dp.message.middleware(AntiFloodMiddleware())
     dp.callback_query.middleware(AntiFloodMiddleware())
     dp.message.middleware(AuthMiddleware())

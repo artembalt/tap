@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message, CallbackQuery
-from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramAPIError
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,7 @@ class RetryMiddleware(BaseMiddleware):
     """
     Middleware для автоматического повтора обработки при сетевых ошибках.
     
-    Перехватывает TelegramNetworkError и повторяет обработку до 3 раз
+    Перехватывает TelegramNetworkError и повторяет обработку до max_retries раз
     с экспоненциальной задержкой.
     """
     
@@ -33,38 +33,50 @@ class RetryMiddleware(BaseMiddleware):
     ) -> Any:
         last_exception = None
         
-        for attempt in range(self.max_retries):
+        for attempt in range(self.max_retries + 1):
             try:
                 return await handler(event, data)
             
             except TelegramRetryAfter as e:
-                # Telegram просит подождать
-                logger.warning(f"Telegram rate limit, ждём {e.retry_after} сек...")
-                await asyncio.sleep(e.retry_after)
+                # Telegram просит подождать - ждём и повторяем
+                wait_time = min(e.retry_after, 60)  # Максимум 60 сек
+                logger.warning(f"Telegram rate limit, ждём {wait_time} сек...")
+                await asyncio.sleep(wait_time)
                 # Пробуем ещё раз (не считаем как попытку)
                 continue
                 
             except TelegramNetworkError as e:
                 last_exception = e
-                delay = self.base_delay * (2 ** attempt)  # 1, 2, 4 сек
+                delay = self.base_delay * (2 ** attempt)  # 1, 2, 4, 8 сек
                 
-                if attempt < self.max_retries - 1:
-                    # Получаем информацию о событии для лога
+                if attempt < self.max_retries:
                     event_info = self._get_event_info(event)
                     logger.warning(
                         f"Сетевая ошибка ({event_info}), "
-                        f"попытка {attempt + 1}/{self.max_retries}, "
+                        f"попытка {attempt + 1}/{self.max_retries + 1}, "
                         f"повтор через {delay:.1f}с: {e}"
                     )
                     await asyncio.sleep(delay)
                 else:
                     logger.error(
-                        f"Все {self.max_retries} попытки исчерпаны: {e}"
+                        f"Все {self.max_retries + 1} попытки исчерпаны: {e}"
                     )
+                    # Отправляем пользователю сообщение об ошибке (если возможно)
+                    await self._notify_user_about_error(event, data)
+            
+            except TelegramAPIError as e:
+                # Другие ошибки API (не сетевые) - не повторяем
+                logger.error(f"Ошибка Telegram API: {e}")
+                raise
+            
+            except Exception as e:
+                # Неожиданные ошибки - логируем и пробрасываем
+                logger.error(f"Неожиданная ошибка в handler: {e}", exc_info=True)
+                raise
         
-        # Все попытки исчерпаны
-        if last_exception:
-            raise last_exception
+        # Все попытки исчерпаны - возвращаем None вместо исключения
+        # чтобы бот не падал
+        return None
     
     def _get_event_info(self, event: TelegramObject) -> str:
         """Получить информацию о событии для логирования"""
@@ -75,3 +87,26 @@ class RetryMiddleware(BaseMiddleware):
             return f"Callback: {event.data}"
         else:
             return f"{type(event).__name__}"
+    
+    async def _notify_user_about_error(self, event: TelegramObject, data: Dict[str, Any]):
+        """Попытаться уведомить пользователя об ошибке"""
+        try:
+            bot = data.get('bot')
+            if not bot:
+                return
+            
+            chat_id = None
+            if isinstance(event, Message):
+                chat_id = event.chat.id
+            elif isinstance(event, CallbackQuery):
+                chat_id = event.message.chat.id if event.message else None
+            
+            if chat_id:
+                # Простое сообщение без retry
+                await bot.send_message(
+                    chat_id,
+                    "⚠️ Произошла сетевая ошибка. Пожалуйста, попробуйте ещё раз через несколько секунд."
+                )
+        except Exception:
+            # Игнорируем ошибки при отправке уведомления
+            pass
