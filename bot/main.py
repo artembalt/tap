@@ -52,7 +52,7 @@ async def on_startup(bot: Bot):
     await set_bot_commands(bot)
     me = await bot.get_me()
     logger.info(f"Бот: @{me.username}")
-    await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
+    await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True, allowed_updates=["message", "callback_query"])
     logger.info(f"Webhook: {WEBHOOK_URL}")
     
     # Логируем все зарегистрированные handlers
