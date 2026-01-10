@@ -87,12 +87,12 @@ async def main():
     
     storage = RedisStorage(redis=redis)
     
-    # Увеличенные таймауты - без RetryMiddleware нужно больше времени
+    # Короткие таймауты - лучше быстро получить ошибку
     timeout = ClientTimeout(
-        total=60,           # Общий таймаут
-        connect=15,         # На установку соединения  
-        sock_read=45,       # На чтение (важно для media)
-        sock_connect=15     # На socket connect
+        total=20,           # Общий таймаут
+        connect=5,          # На установку соединения  
+        sock_read=15,       # На чтение
+        sock_connect=5      # На socket connect
     )
     
     session = AiohttpSession(timeout=timeout)
