@@ -5,7 +5,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from aiohttp import web, ClientTimeout, TCPConnector
+from aiohttp import web, ClientTimeout
 
 from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.types import Update, TelegramObject, Message, CallbackQuery
@@ -81,7 +81,6 @@ async def on_startup(bot: Bot):
     await init_db()
     await set_bot_commands(bot)
     
-    # Прогрев сессии
     try:
         me = await bot.get_me()
         logger.info(f"Бот: @{me.username}")
@@ -111,22 +110,15 @@ async def main():
     )
     storage = RedisStorage(redis=redis)
     
-    # Короткие таймауты + force_close для избежания проблем с keep-alive
+    # Короткие таймауты для быстрого retry
     timeout = ClientTimeout(
-        total=30,        # Максимум 30 секунд на всё
-        connect=10,      # 10 секунд на соединение
-        sock_read=20,    # 20 секунд на чтение
-        sock_connect=10  # 10 секунд на socket connect
+        total=30,
+        connect=10,
+        sock_read=20,
+        sock_connect=10
     )
     
-    connector = TCPConnector(
-        limit=100,
-        limit_per_host=30,
-        force_close=True,    # Закрывать соединения после использования
-        enable_cleanup_closed=True
-    )
-    
-    session = AiohttpSession(timeout=timeout, connector=connector)
+    session = AiohttpSession(timeout=timeout)
     bot = Bot(
         token=settings.BOT_TOKEN,
         session=session,
@@ -135,7 +127,7 @@ async def main():
     
     dp = Dispatcher(storage=storage)
     
-    # Middleware - порядок важен!
+    # Middleware
     dp.update.outer_middleware(RawUpdateLogger())
     dp.message.outer_middleware(RetryMiddleware())
     dp.callback_query.outer_middleware(RetryMiddleware())
@@ -160,7 +152,7 @@ async def main():
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
     
-    logger.info(f"Сервер запущен на {WEB_SERVER_HOST}:{WEB_SERVER_PORT}")
+    logger.info(f"Сервер: {WEB_SERVER_HOST}:{WEB_SERVER_PORT}")
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
