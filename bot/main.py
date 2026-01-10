@@ -1,22 +1,22 @@
 # bot/main.py
-"""Telegram бот - webhook режим с улучшенной обработкой сетевых ошибок"""
+"""ДИАГНОСТИЧЕСКАЯ ВЕРСИЯ - логирует ВСЕ callback'и"""
 
 import asyncio
 import logging
 import sys
 from pathlib import Path
 from aiohttp import web, ClientTimeout
+from typing import Any, Awaitable, Callable, Dict
 
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, BaseMiddleware
+from aiogram.types import TelegramObject, Message, CallbackQuery
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
-from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 from redis.asyncio import Redis
 
-# Добавляем корневую директорию в путь
 sys.path.append(str(Path(__file__).parent.parent))
 
 from bot.config import settings
@@ -25,14 +25,11 @@ from bot.handlers import (
     start, ad_creation, ad_management,
     search, profile, admin, payment
 )
-from bot.middlewares.antiflood import AntiFloodMiddleware
-from bot.middlewares.auth import AuthMiddleware
-from bot.middlewares.retry import RetryMiddleware
 from bot.utils.commands import set_bot_commands
 
-# Настройка логирования
+# Настройка логирования - УРОВЕНЬ DEBUG!
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler('logs/bot.log'),
@@ -41,7 +38,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Webhook настройки
+# Отключаем спам от aiohttp и aiogram
+logging.getLogger('aiohttp').setLevel(logging.WARNING)
+logging.getLogger('aiogram').setLevel(logging.INFO)
+
 WEBHOOK_PATH = "/webhook/bot"
 DOMAIN = getattr(settings, 'DOMAIN', 'prodaybot.ru')
 WEBHOOK_URL = f"https://{DOMAIN}{WEBHOOK_PATH}"
@@ -49,63 +49,64 @@ WEB_SERVER_HOST = "127.0.0.1"
 WEB_SERVER_PORT = 8080
 
 
+class DiagnosticMiddleware(BaseMiddleware):
+    """Middleware для диагностики - логирует ВСЕ события"""
+    
+    async def __call__(
+        self,
+        handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
+        event: TelegramObject,
+        data: Dict[str, Any]
+    ) -> Any:
+        # Логируем ДО обработки
+        if isinstance(event, CallbackQuery):
+            logger.info(f">>> CALLBACK ПОЛУЧЕН: data='{event.data}', user={event.from_user.id}")
+        elif isinstance(event, Message):
+            text = event.text or event.caption or "[media]"
+            logger.info(f">>> MESSAGE ПОЛУЧЕН: '{text[:50]}', user={event.from_user.id}")
+        
+        try:
+            # Вызываем handler
+            result = await handler(event, data)
+            
+            # Логируем ПОСЛЕ успешной обработки
+            if isinstance(event, CallbackQuery):
+                logger.info(f"<<< CALLBACK ОБРАБОТАН: data='{event.data}'")
+            
+            return result
+            
+        except Exception as e:
+            # Логируем ошибку
+            logger.error(f"!!! ОШИБКА в handler: {type(e).__name__}: {e}", exc_info=True)
+            raise
+
+
 async def on_startup(bot: Bot):
     """Действия при запуске бота"""
-    logger.info("Запуск webhook бота...")
+    logger.info("=" * 50)
+    logger.info("ЗАПУСК ДИАГНОСТИЧЕСКОЙ ВЕРСИИ БОТА")
+    logger.info("=" * 50)
+    
     await init_db()
     await set_bot_commands(bot)
     
-    # Прогрев сессии - первый запрос устанавливает соединение
-    for attempt in range(3):
-        try:
-            me = await bot.get_me()
-            logger.info(f"Бот прогрет: @{me.username}")
-            break
-        except TelegramNetworkError as e:
-            logger.warning(f"Прогрев сессии, попытка {attempt + 1}: {e}")
-            await asyncio.sleep(2)
+    try:
+        me = await bot.get_me()
+        logger.info(f"Бот: @{me.username}")
+    except Exception as e:
+        logger.error(f"Ошибка get_me: {e}")
     
-    # Установка webhook с retry
-    for attempt in range(3):
-        try:
-            await bot.set_webhook(
-                url=WEBHOOK_URL,
-                drop_pending_updates=True
-            )
-            logger.info(f"Webhook установлен: {WEBHOOK_URL}")
-            break
-        except TelegramNetworkError as e:
-            logger.warning(f"Установка webhook, попытка {attempt + 1}: {e}")
-            await asyncio.sleep(2)
+    await bot.set_webhook(url=WEBHOOK_URL, drop_pending_updates=True)
+    logger.info(f"Webhook: {WEBHOOK_URL}")
 
 
 async def on_shutdown(bot: Bot):
-    """Действия при остановке бота"""
-    logger.info("Остановка webhook бота...")
-    try:
-        await bot.delete_webhook()
-    except Exception as e:
-        logger.warning(f"Ошибка удаления webhook: {e}")
-
-
-async def error_handler(update, exception):
-    """Глобальный обработчик ошибок"""
-    if isinstance(exception, TelegramNetworkError):
-        logger.warning(f"Сетевая ошибка Telegram: {exception}")
-        return True  # Ошибка обработана
-    elif isinstance(exception, TelegramRetryAfter):
-        logger.warning(f"Rate limit, ждём {exception.retry_after} сек")
-        await asyncio.sleep(exception.retry_after)
-        return True
-    else:
-        logger.error(f"Необработанная ошибка: {exception}", exc_info=True)
-        return True  # Не падаем на ошибках
+    logger.info("Остановка бота...")
+    await bot.delete_webhook()
 
 
 async def main():
-    """Основная функция запуска бота с webhook"""
-    
-    # Инициализация Redis для FSM
+    # Redis
     redis = Redis(
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
@@ -114,65 +115,55 @@ async def main():
         decode_responses=True
     )
     
+    # Проверка Redis
+    try:
+        await redis.ping()
+        logger.info("Redis: OK")
+    except Exception as e:
+        logger.error(f"Redis ОШИБКА: {e}")
+    
     storage = RedisStorage(redis=redis)
     
-    # УВЕЛИЧЕННЫЕ таймауты для нестабильной сети российских VPS
-    timeout = ClientTimeout(
-        total=60,           # Общий таймаут (было 20)
-        connect=15,         # На установку соединения (было 5)
-        sock_read=45,       # На чтение (было 15)
-        sock_connect=15     # На socket connect (было 5)
-    )
-    
+    # Таймауты
+    timeout = ClientTimeout(total=30, connect=10, sock_read=20, sock_connect=10)
     session = AiohttpSession(timeout=timeout)
     
-    # Инициализация бота
     bot = Bot(
         token=settings.BOT_TOKEN,
         session=session,
-        default=DefaultBotProperties(
-            parse_mode=ParseMode.HTML
-        )
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     
     dp = Dispatcher(storage=storage)
     
-    # Регистрация глобального обработчика ошибок
-    dp.errors.register(error_handler)
+    # ТОЛЬКО DiagnosticMiddleware - без других!
+    dp.message.middleware(DiagnosticMiddleware())
+    dp.callback_query.middleware(DiagnosticMiddleware())
     
-    # Middleware - RetryMiddleware ПЕРВЫМ для обработки сетевых ошибок
-    dp.message.middleware(RetryMiddleware(max_retries=3, base_delay=1.0))
-    dp.callback_query.middleware(RetryMiddleware(max_retries=3, base_delay=1.0))
-    dp.message.middleware(AntiFloodMiddleware())
-    dp.callback_query.middleware(AntiFloodMiddleware())
-    dp.message.middleware(AuthMiddleware())
+    # Регистрация роутеров с логированием
+    logger.info("Регистрация роутеров:")
     
-    # Регистрация обработчиков
     dp.include_router(start.router)
+    logger.info(f"  - start.router: {len(start.router.callback_query.handlers)} callback handlers")
+    
     dp.include_router(ad_creation.router)
+    logger.info(f"  - ad_creation.router: {len(ad_creation.router.callback_query.handlers)} callback handlers")
+    
     dp.include_router(ad_management.router)
     dp.include_router(search.router)
     dp.include_router(profile.router)
     dp.include_router(payment.router)
     dp.include_router(admin.router)
     
-    # Регистрация хуков
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)
     
-    # Создаём веб-приложение
     app = web.Application()
-    
-    # Настраиваем webhook handler
-    webhook_requests_handler = SimpleRequestHandler(
-        dispatcher=dp,
-        bot=bot
-    )
+    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
     
-    # Запуск сервера
-    logger.info(f"Запуск сервера на {WEB_SERVER_HOST}:{WEB_SERVER_PORT}")
+    logger.info(f"Сервер: {WEB_SERVER_HOST}:{WEB_SERVER_PORT}")
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, WEB_SERVER_HOST, WEB_SERVER_PORT)
@@ -180,9 +171,6 @@ async def main():
     try:
         await site.start()
         await asyncio.Event().wait()
-    except Exception as e:
-        logger.error(f"Ошибка сервера: {e}")
-        raise
     finally:
         await runner.cleanup()
         await bot.session.close()
@@ -193,7 +181,7 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logger.info("Бот остановлен пользователем")
+        logger.info("Бот остановлен")
     except Exception as e:
-        logger.error(f"Критическая ошибка: {e}")
+        logger.error(f"Критическая ошибка: {e}", exc_info=True)
         sys.exit(1)
