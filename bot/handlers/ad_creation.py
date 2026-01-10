@@ -301,7 +301,7 @@ async def ask_photos(message: Message, state: FSMContext):
     from bot.keyboards.inline import get_photo_skip_keyboard
     msg = await message.answer(
         "📸 <b>Шаг 9: Фото</b>\n\n"
-        "Отправьте фото товара (до 10 шт).\n"
+        "Отправьте фото товара без видео (до 10 шт, или до 9 шт если будет видео. Загрузка видео в следующем шаге).\n"
         "Можно отправить сразу несколько или по одному.\n\n"
         "Когда закончите — нажмите <b>Далее</b>.",
         reply_markup=get_photo_skip_keyboard()
@@ -470,7 +470,7 @@ async def ask_video(message: Message, state: FSMContext):
     from bot.keyboards.inline import get_video_keyboard
     msg = await message.answer(
         "🎬 <b>Шаг 10: Видео</b>\n\n"
-        "Отправьте видео товара (до 50 МБ).\n"
+        "Отправьте одно видео товара (до 50 МБ).\n"
         "Или нажмите <b>Пропустить</b>.",
         reply_markup=get_video_keyboard()
     )
