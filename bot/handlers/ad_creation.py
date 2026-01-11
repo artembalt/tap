@@ -9,9 +9,24 @@ from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InputMediaPhoto, InputMediaVideo
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramNetworkError
 
 from bot.database.connection import get_db_session
 from bot.database.models import Ad, AdStatus
+
+
+async def send_with_retry(message: Message, text: str, reply_markup=None, max_retries: int = 5):
+    """Отправка сообщения с retry для обхода cold start"""
+    for attempt in range(max_retries):
+        try:
+            return await message.answer(text, reply_markup=reply_markup)
+        except TelegramNetworkError as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Сетевая ошибка (попытка {attempt+1}), повтор: {e}")
+                await asyncio.sleep(0.2)
+            else:
+                logger.error(f"Не удалось отправить сообщение: {e}")
+                raise
 from shared.regions_config import (
     REGIONS, CITIES, CATEGORIES, SUBCATEGORIES, DEAL_TYPES,
     CONDITION_TYPES, DELIVERY_TYPES, CATEGORIES_WITH_DELIVERY,
