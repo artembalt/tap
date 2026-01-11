@@ -5,7 +5,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from aiohttp import web, ClientTimeout, TCPConnector
+from aiohttp import web, ClientTimeout
 
 from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.types import Update, TelegramObject, Message, CallbackQuery
@@ -109,12 +109,12 @@ async def main():
     
     # Короткие таймауты чтобы не зависать
     timeout = ClientTimeout(
-        total=15,
-        connect=5,
-        sock_read=10,
-        sock_connect=5
+        total=10,
+        connect=3,
+        sock_read=5,
+        sock_connect=3
     )
-    
+
     session = AiohttpSession(timeout=timeout)
     bot = Bot(
         token=settings.BOT_TOKEN,
