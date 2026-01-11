@@ -560,7 +560,9 @@ async def show_preview(message: Message, state: FSMContext):
     logger.info("[PREVIEW] show_preview")
     data = await state.get_data()
     await state.set_state(AdCreation.confirm)
-    
+
+    description = data.get('description') or ''
+
     text = f"""📢 <b>Превью</b>
 
 📍 {REGIONS.get(data.get('region', ''), '')}
@@ -569,15 +571,28 @@ async def show_preview(message: Message, state: FSMContext):
 
 <b>{data.get('title', '')}</b>
 
-{data.get('description', '')[:200]}...
+{description[:200]}{'...' if len(description) > 200 else ''}
 
 💰 {data.get('price', 'Не указана')}
 📸 {len(data.get('photos', []))} фото
 
 <b>Опубликовать?</b>"""
-    
+
     from bot.keyboards.inline import get_confirm_with_edit_keyboard
-    await message.answer(text, reply_markup=get_confirm_with_edit_keyboard())
+    from aiogram.exceptions import TelegramNetworkError
+
+    # Retry отправки сообщения (до 2 попыток с коротким интервалом)
+    for attempt in range(2):
+        try:
+            await message.answer(text, reply_markup=get_confirm_with_edit_keyboard())
+            return
+        except TelegramNetworkError as e:
+            if attempt == 0:
+                logger.warning(f"[PREVIEW] Сетевая ошибка, повтор: {e}")
+                await asyncio.sleep(1)
+            else:
+                logger.error(f"[PREVIEW] Не удалось отправить превью: {e}")
+                await message.answer("⚠️ Ошибка сети. Попробуйте ещё раз.")
 
 
 # ========== ПУБЛИКАЦИЯ ==========
