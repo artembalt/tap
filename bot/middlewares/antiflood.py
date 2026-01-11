@@ -6,15 +6,22 @@ from typing import Dict, Any, Callable, Awaitable, Optional
 
 from aiogram import BaseMiddleware
 from aiogram.types import Message, CallbackQuery, TelegramObject
+from aiogram.fsm.context import FSMContext
 from redis.asyncio import Redis
 
 logger = logging.getLogger(__name__)
+
+# FSM состояния, которые исключены из проверки лимитов (создание объявления)
+EXCLUDED_FSM_STATES = (
+    "AdCreation:",  # Все состояния создания объявления
+)
 
 
 class AntiFloodMiddleware(BaseMiddleware):
     """
     Middleware для защиты от флуда.
     Использует Redis для хранения счетчиков сообщений.
+    Исключает из проверки шаги создания объявления.
     """
 
     def __init__(
@@ -46,6 +53,14 @@ class AntiFloodMiddleware(BaseMiddleware):
         user_id = event.from_user.id if event.from_user else None
         if not user_id:
             return await handler(event, data)
+
+        # Проверяем FSM состояние - исключаем шаги создания объявления
+        state: FSMContext = data.get("state")
+        if state:
+            current_state = await state.get_state()
+            if current_state and any(current_state.startswith(exc) for exc in EXCLUDED_FSM_STATES):
+                # Пользователь в процессе создания объявления - пропускаем лимит
+                return await handler(event, data)
 
         # Проверяем блокировку и rate limit
         is_blocked = await self._check_rate_limit(user_id)
