@@ -526,10 +526,10 @@ async def skip_video(callback: CallbackQuery, state: FSMContext):
 async def ask_price(message: Message, state: FSMContext):
     logger.info("[PRICE] ask_price")
     await state.set_state(AdCreation.price)
-    
+
     from bot.keyboards.inline import get_price_keyboard
     await message.answer(
-        "💰 <b>Шаг 11: Цена</b>\n\nВведите цену:", 
+        "💰 <b>Шаг 11: Цена</b>\n\nВведите цену:",
         reply_markup=get_price_keyboard()
     )
 
@@ -537,39 +537,97 @@ async def ask_price(message: Message, state: FSMContext):
 @router.message(AdCreation.price)
 async def process_price(message: Message, state: FSMContext):
     logger.info("[PRICE] process_price")
-    
+
     if not message.text:
         await message.answer("❌ Введите число")
         return
-    
+
     try:
         price = float(message.text.strip().replace(" ", "").replace(",", "."))
         price_display = f"{int(price):,} ₽".replace(",", " ")
     except ValueError:
         await message.answer("❌ Введите число")
         return
-    
+
+    # Сохраняем цену и показываем подтверждение
     await state.update_data(price=price_display)
-    await message.answer(f"✅ <b>Цена:</b> {price_display}")
-    
+
+    from bot.keyboards.inline import get_price_confirm_keyboard
+    await message.answer(
+        f"💰 <b>Цена:</b> {price_display}\n\nВсё верно?",
+        reply_markup=get_price_confirm_keyboard(price_display)
+    )
+
+
+@router.callback_query(F.data == "price_confirm")
+async def price_confirm(callback: CallbackQuery, state: FSMContext):
+    """Подтверждение цены - переход к превью"""
+    logger.info("[PRICE] confirm")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except:
+        pass
+
     data = await state.get_data()
+    await callback.message.answer(f"✅ <b>Цена:</b> {data.get('price')}")
+
+    # Показываем сообщение о подготовке превью
+    await callback.message.answer("⏳ Подготавливаю превью объявления...")
+
     if data.get('category') in CATEGORIES_WITH_DELIVERY:
-        await ask_delivery(message, state)
+        await ask_delivery(callback.message, state)
     else:
-        await show_preview(message, state)
+        await show_preview(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "price_change")
+async def price_change(callback: CallbackQuery, state: FSMContext):
+    """Изменить цену - вернуться к вводу"""
+    logger.info("[PRICE] change")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except:
+        pass
+
+    await callback.message.answer("💰 Введите новую цену:")
+    await callback.answer()
 
 
 @router.callback_query(F.data == "price_negotiable")
 async def price_negotiable(callback: CallbackQuery, state: FSMContext):
+    """Договорная цена при первом запросе"""
     logger.info("[PRICE] negotiable")
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except:
         pass
-    
+
     await state.update_data(price="Договорная")
     await callback.message.answer("✅ <b>Цена:</b> Договорная")
-    
+    await callback.message.answer("⏳ Подготавливаю превью объявления...")
+
+    data = await state.get_data()
+    if data.get('category') in CATEGORIES_WITH_DELIVERY:
+        await ask_delivery(callback.message, state)
+    else:
+        await show_preview(callback.message, state)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "price_negotiable_confirm")
+async def price_negotiable_confirm(callback: CallbackQuery, state: FSMContext):
+    """Договорная цена при подтверждении"""
+    logger.info("[PRICE] negotiable from confirm")
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except:
+        pass
+
+    await state.update_data(price="Договорная")
+    await callback.message.answer("✅ <b>Цена:</b> Договорная")
+    await callback.message.answer("⏳ Подготавливаю превью объявления...")
+
     data = await state.get_data()
     if data.get('category') in CATEGORIES_WITH_DELIVERY:
         await ask_delivery(callback.message, state)
@@ -704,15 +762,43 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
         
         # Публикация в каналы
         channel_ids = await publish_to_channel(callback.message.bot, bot_info, ad, data)
-        
+
         if channel_ids:
             async with get_db_session() as session:
                 from sqlalchemy import update
                 stmt = update(Ad).where(Ad.id == ad_id).values(channel_message_ids=channel_ids)
                 await session.execute(stmt)
                 await session.commit()
-        
-        await callback.message.answer(f"✅ <b>Опубликовано!</b>\n\nID: <code>{ad_id}</code>")
+
+        # Формируем сообщение с категорией и ссылкой
+        category = data.get('category', '')
+        category_name = CATEGORIES.get(category, category)
+        region = data.get('region', '')
+
+        # Получаем ссылку на объявление в канале категории
+        channel_config = CHANNELS_CONFIG.get(region, {})
+        category_channel = channel_config.get('categories', {}).get(category, '')
+
+        result_text = f"✅ <b>Опубликовано!</b>\n\n"
+        result_text += f"🆔 ID: <code>{ad_id}</code>\n"
+
+        if category_channel and category_channel in channel_ids:
+            msg_id = channel_ids[category_channel]
+            channel_username = category_channel.replace("@", "")
+            ad_link = f"https://t.me/{channel_username}/{msg_id}"
+            result_text += f"📂 Категория: <a href=\"{ad_link}\">{category_name}</a>"
+        elif channel_ids:
+            # Берём первый доступный канал
+            for channel, msg_id in channel_ids.items():
+                if channel.startswith("@"):
+                    channel_username = channel.replace("@", "")
+                    ad_link = f"https://t.me/{channel_username}/{msg_id}"
+                    result_text += f"📂 Категория: <a href=\"{ad_link}\">{category_name}</a>"
+                    break
+        else:
+            result_text += f"📂 Категория: {category_name}"
+
+        await callback.message.answer(result_text, disable_web_page_preview=True)
         
     except Exception as e:
         logger.error(f"[PUBLISH] Ошибка: {e}", exc_info=True)

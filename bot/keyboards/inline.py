@@ -131,6 +131,16 @@ def get_price_keyboard() -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
+def get_price_confirm_keyboard(price: str) -> InlineKeyboardMarkup:
+    """Клавиатура для подтверждения цены"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Верно", callback_data="price_confirm")
+    builder.button(text="✏️ Изменить", callback_data="price_change")
+    builder.button(text="💬 Договорная", callback_data="price_negotiable_confirm")
+    builder.adjust(2, 1)
+    return builder.as_markup()
+
+
 def get_photo_skip_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура при запросе фото - только Пропустить"""
     builder = InlineKeyboardBuilder()
