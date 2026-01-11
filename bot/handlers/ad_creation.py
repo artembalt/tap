@@ -371,77 +371,77 @@ async def process_condition(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ========== ФОТО (ИСПРАВЛЕНО - корректная обработка media groups) ==========
+# ========== ФОТО ==========
 async def ask_photos(message: Message, state: FSMContext):
     logger.info("[PHOTOS] ask_photos")
     await state.set_state(AdCreation.photos)
-    await state.update_data(photos=[], photo_msg_id=None, photo_batch_id=0)
+    await state.update_data(photos=[], photo_batch_id=0)
 
     from bot.keyboards.inline import get_photo_skip_keyboard
-    msg = await message.answer(
+    await message.answer(
         "📸 <b>Шаг 9: Фото</b>\n\n"
-        "Отправьте фото (до 10 шт) или нажмите <b>Пропустить</b>.\n"
-        "Загружено: 0/10",
+        "Отправьте фото (до 10 шт) или нажмите <b>Пропустить</b>.\n\n"
+        "💡 <i>Если хотите добавить видео — загрузите не более 9 фото.\n"
+        "При 10 фото видео заменит последнее фото.</i>",
         reply_markup=get_photo_skip_keyboard()
     )
-    await state.update_data(photo_msg_id=msg.message_id)
 
 
 @router.message(AdCreation.photos, F.photo)
 async def process_photo(message: Message, state: FSMContext):
-    """Обработка фото с debounce для media groups"""
+    """Обработка фото - новое сообщение после каждой загрузки"""
     import time
     from bot.keyboards.inline import get_photo_done_keyboard
 
     data = await state.get_data()
     photos = data.get("photos", [])
-    photo_msg_id = data.get("photo_msg_id")
 
+    # Проверяем лимит
     if len(photos) >= 10:
+        await message.answer("⚠️ Достигнут лимит 10 фото. Нажмите <b>Далее</b> для продолжения.",
+                           reply_markup=get_photo_done_keyboard())
         return
 
-    # Добавляем фото
+    # Проверяем дубликат
     photo_id = message.photo[-1].file_id
-    if photo_id not in photos:
+    is_duplicate = photo_id in photos
+
+    if not is_duplicate:
         photos.append(photo_id)
 
-    # Генерируем новый batch_id для этой "волны" фото
+    # Генерируем batch_id для группировки media group
     batch_id = time.time()
-    await state.update_data(photos=photos, photo_batch_id=batch_id)
+    await state.update_data(photos=photos, photo_batch_id=batch_id, last_was_duplicate=is_duplicate)
 
-    # Небольшая задержка для сбора всех фото из media group
-    await asyncio.sleep(0.4)
+    # Задержка для сбора всех фото из media group
+    await asyncio.sleep(0.5)
 
-    # Проверяем, что за это время не пришло новых фото (batch_id не изменился)
+    # Проверяем, что за это время не пришло новых фото
     fresh_data = await state.get_data()
     if fresh_data.get("photo_batch_id") != batch_id:
-        # Пришли новые фото, это обновление пропускаем
         return
 
-    # Получаем актуальное количество
+    # Получаем актуальные данные
     photos = fresh_data.get("photos", [])
     count = len(photos)
 
-    # Обновляем сообщение с кнопкой "Далее"
-    try:
-        if photo_msg_id:
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=photo_msg_id,
-                text=f"📸 <b>Шаг 9: Фото</b>\n\n"
-                     f"✅ Загружено: {count}/10 фото\n\n"
-                     f"Отправьте ещё или нажмите <b>Далее</b>.",
-                reply_markup=get_photo_done_keyboard()
-            )
-    except Exception as e:
-        if "message is not modified" not in str(e).lower():
-            logger.warning(f"[PHOTOS] Не удалось обновить сообщение: {e}")
-            # Fallback - отправляем новое сообщение
-            msg = await message.answer(
-                f"✅ Загружено {count}/10 фото. Нажмите <b>Далее</b>.",
-                reply_markup=get_photo_done_keyboard()
-            )
-            await state.update_data(photo_msg_id=msg.message_id)
+    # Формируем сообщение
+    if fresh_data.get("last_was_duplicate"):
+        text = f"⚠️ Некоторые фото уже были загружены ранее.\n\n"
+    else:
+        text = ""
+
+    text += f"✅ <b>Загружено: {count}/10 фото</b>\n\n"
+
+    if count < 10:
+        text += "Отправьте ещё фото или нажмите <b>Далее</b>."
+        if count == 9:
+            text += "\n\n💡 <i>Осталось 1 место. Если загрузите ещё фото — видео будет недоступно.</i>"
+    else:
+        text += "🔸 Достигнут лимит. Нажмите <b>Далее</b>.\n"
+        text += "<i>Видео заменит последнее фото, если захотите его добавить.</i>"
+
+    await message.answer(text, reply_markup=get_photo_done_keyboard())
 
 
 @router.callback_query(F.data == "photos_skip")
@@ -476,19 +476,38 @@ async def photos_done(callback: CallbackQuery, state: FSMContext):
 async def ask_video(message: Message, state: FSMContext):
     logger.info("[VIDEO] ask_video")
     await state.set_state(AdCreation.video)
-    
+
+    data = await state.get_data()
+    photos_count = len(data.get('photos', []))
+
     from bot.keyboards.inline import get_video_keyboard
-    await message.answer(
-        "🎬 <b>Шаг 10: Видео</b>\n\nОтправьте видео или нажмите <b>Пропустить</b>.",
-        reply_markup=get_video_keyboard()
-    )
+
+    if photos_count >= 10:
+        text = ("🎬 <b>Шаг 10: Видео</b>\n\n"
+                "⚠️ У вас загружено 10 фото. Если добавите видео — <b>последнее фото будет удалено</b>.\n\n"
+                "Отправьте видео или нажмите <b>Пропустить</b>.")
+    else:
+        text = "🎬 <b>Шаг 10: Видео</b>\n\nОтправьте видео или нажмите <b>Пропустить</b>."
+
+    await message.answer(text, reply_markup=get_video_keyboard())
 
 
 @router.message(AdCreation.video, F.video)
 async def process_video(message: Message, state: FSMContext):
     logger.info("[VIDEO] video received")
-    await state.update_data(video=message.video.file_id)
-    await message.answer("✅ <b>Видео:</b> загружено")
+
+    data = await state.get_data()
+    photos = data.get('photos', [])
+
+    # Если 10 фото — удаляем последнее
+    if len(photos) >= 10:
+        photos = photos[:9]
+        await state.update_data(photos=photos, video=message.video.file_id)
+        await message.answer("✅ <b>Видео:</b> загружено\n<i>Последнее фото удалено (лимит 9 фото + 1 видео)</i>")
+    else:
+        await state.update_data(video=message.video.file_id)
+        await message.answer("✅ <b>Видео:</b> загружено")
+
     await ask_price(message, state)
 
 
