@@ -782,27 +782,37 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
         channels.append(main_channel)
     
     for channel in channels:
-        try:
-            if photos:
-                if len(photos) == 1:
-                    msg = await bot.send_photo(chat_id=channel, photo=photos[0], caption=text)
+        # Retry для каждого канала (до 5 попыток)
+        for attempt in range(5):
+            try:
+                if photos:
+                    if len(photos) == 1:
+                        msg = await bot.send_photo(chat_id=channel, photo=photos[0], caption=text)
+                    else:
+                        media = [InputMediaPhoto(media=photos[0], caption=text)]
+                        for p in photos[1:10]:
+                            media.append(InputMediaPhoto(media=p))
+                        msgs = await bot.send_media_group(chat_id=channel, media=media)
+                        msg = msgs[0] if msgs else None
+                elif video:
+                    msg = await bot.send_video(chat_id=channel, video=video, caption=text)
                 else:
-                    media = [InputMediaPhoto(media=photos[0], caption=text)]
-                    for p in photos[1:10]:
-                        media.append(InputMediaPhoto(media=p))
-                    msgs = await bot.send_media_group(chat_id=channel, media=media)
-                    msg = msgs[0] if msgs else None
-            elif video:
-                msg = await bot.send_video(chat_id=channel, video=video, caption=text)
-            else:
-                msg = await bot.send_message(chat_id=channel, text=text, disable_web_page_preview=True)
-            
-            if msg:
-                channel_ids[channel] = msg.message_id
-                logger.info(f"[CHANNEL] опубликовано в {channel}, msg_id={msg.message_id}")
-                
-        except Exception as e:
-            logger.error(f"[CHANNEL] ошибка {channel}: {e}")
+                    msg = await bot.send_message(chat_id=channel, text=text, disable_web_page_preview=True)
+
+                if msg:
+                    channel_ids[channel] = msg.message_id
+                    logger.info(f"[CHANNEL] опубликовано в {channel}, msg_id={msg.message_id}")
+                break  # Успех - выходим из retry
+
+            except TelegramNetworkError as e:
+                if attempt < 4:
+                    logger.warning(f"[CHANNEL] {channel} таймаут (попытка {attempt+1}), повтор: {e}")
+                    await asyncio.sleep(0.3)
+                else:
+                    logger.error(f"[CHANNEL] ошибка {channel} после 5 попыток: {e}")
+            except Exception as e:
+                logger.error(f"[CHANNEL] ошибка {channel}: {e}")
+                break  # Другая ошибка - не повторяем
     
     return channel_ids
 
