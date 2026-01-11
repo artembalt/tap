@@ -97,6 +97,7 @@ class User(Base):
     completed_deals = Column(Integer, default=0)
     rating = Column(Float, default=0.0)
     reviews_count = Column(Integer, default=0)
+    profile_views = Column(Integer, default=0)  # Просмотры профиля
     
     # Подписки и платежи
     is_premium = Column(Boolean, default=False)
