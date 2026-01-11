@@ -120,19 +120,20 @@ async def main():
     )
     storage = RedisStorage(redis=redis)
     
-    # Очень короткие таймауты для быстрого retry при cold start
+    # Увеличенные таймауты для стабильной работы
     timeout = ClientTimeout(
-        total=8,
-        connect=2,
-        sock_read=3,
-        sock_connect=2
+        total=30,       # Общий таймаут 30 сек
+        connect=10,     # Подключение 10 сек
+        sock_read=15,   # Чтение 15 сек
+        sock_connect=10 # Сокет 10 сек
     )
 
     session = AiohttpSession(timeout=timeout)
-    # Настраиваем connector для избежания "протухших" соединений
+    # Настраиваем connector для стабильных соединений
     session._connector_init.update({
-        'keepalive_timeout': 10,
+        'keepalive_timeout': 30,
         'enable_cleanup_closed': True,
+        'force_close': False,
     })
     bot = Bot(
         token=settings.BOT_TOKEN,
