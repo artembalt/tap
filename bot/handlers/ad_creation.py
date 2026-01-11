@@ -67,7 +67,7 @@ async def start_creation_callback(callback: CallbackQuery, state: FSMContext):
     await ask_region(callback.message, state)
 
 
-@router.message(F.text.in_(["Создать объявление", "📝 Подать объявление", "/create"]))
+@router.message(F.text.in_(["Создать объявление", "📝 Подать объявление", "/create", "/new_ad"]))
 async def start_creation(message: Message, state: FSMContext):
     logger.info(f"[NEW_AD] message, user={message.from_user.id}")
     await state.clear()

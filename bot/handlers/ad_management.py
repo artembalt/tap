@@ -4,6 +4,7 @@
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 
@@ -26,6 +27,7 @@ class EditAdStates(StatesGroup):
 # ПРОСМОТР СПИСКА СВОИХ ОБЪЯВЛЕНИЙ
 # =============================================================================
 
+@router.message(Command("my_ads"))
 @router.message(F.text == "📋 Мои объявления")
 async def my_ads(message: Message):
     """Показать список объявлений пользователя"""
