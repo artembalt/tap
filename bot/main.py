@@ -73,7 +73,7 @@ class RawUpdateLogger(BaseMiddleware):
 async def keepalive_task(bot: Bot):
     """Фоновая задача для поддержания соединения с Telegram API"""
     while True:
-        await asyncio.sleep(30)  # Каждые 30 секунд
+        await asyncio.sleep(15)  # Каждые 15 секунд - держим соединение горячим
         try:
             await bot.get_me()
         except Exception:

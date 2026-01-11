@@ -27,6 +27,8 @@ async def send_with_retry(message: Message, text: str, reply_markup=None, max_re
             else:
                 logger.error(f"Не удалось отправить сообщение: {e}")
                 raise
+
+
 from shared.regions_config import (
     REGIONS, CITIES, CATEGORIES, SUBCATEGORIES, DEAL_TYPES,
     CONDITION_TYPES, DELIVERY_TYPES, CATEGORIES_WITH_DELIVERY,
@@ -76,13 +78,14 @@ async def start_creation(message: Message, state: FSMContext):
 async def ask_region(message: Message, state: FSMContext):
     logger.info("[REGION] ask_region вызван")
     await state.set_state(AdCreation.region)
-    
+
     current = await state.get_state()
     logger.info(f"[REGION] state установлен: {current}")
-    
+
     from bot.keyboards.inline import get_regions_keyboard
-    await message.answer(
-        "📍 <b>Шаг 1: Регион</b>\n\nВыберите регион:", 
+    await send_with_retry(
+        message,
+        "📍 <b>Шаг 1: Регион</b>\n\nВыберите регион:",
         reply_markup=get_regions_keyboard()
     )
     logger.info("[REGION] сообщение отправлено")
