@@ -41,11 +41,11 @@ WEB_SERVER_PORT = 8080
 
 
 class RetryMiddleware(BaseMiddleware):
-    """Middleware для автоматического retry при сетевых ошибках"""
-    
+    """Middleware для обработки rate limit (retry только для TelegramRetryAfter)"""
+
     async def __call__(self, handler, event: TelegramObject, data: dict):
         max_retries = 3
-        
+
         for attempt in range(max_retries):
             try:
                 return await handler(event, data)
@@ -53,13 +53,10 @@ class RetryMiddleware(BaseMiddleware):
                 logger.warning(f"Rate limit, ждём {e.retry_after}с")
                 await asyncio.sleep(e.retry_after)
             except TelegramNetworkError as e:
-                if attempt < max_retries - 1:
-                    delay = (attempt + 1) * 2
-                    logger.warning(f"Сетевая ошибка (попытка {attempt+1}/{max_retries}), повтор через {delay}с: {e}")
-                    await asyncio.sleep(delay)
-                else:
-                    logger.error(f"Все {max_retries} попытки исчерпаны: {e}")
-                    raise
+                # НЕ повторяем весь handler при сетевой ошибке -
+                # это вызывает дублирование сообщений и зависание
+                logger.error(f"Сетевая ошибка: {e}")
+                raise
 
 
 class RawUpdateLogger(BaseMiddleware):
@@ -110,12 +107,12 @@ async def main():
     )
     storage = RedisStorage(redis=redis)
     
-    # Короткие таймауты для быстрого retry
+    # Короткие таймауты чтобы не зависать
     timeout = ClientTimeout(
-        total=30,
-        connect=10,
-        sock_read=20,
-        sock_connect=10
+        total=15,
+        connect=5,
+        sock_read=10,
+        sock_connect=5
     )
     
     session = AiohttpSession(timeout=timeout)
