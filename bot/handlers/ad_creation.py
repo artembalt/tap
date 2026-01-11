@@ -703,16 +703,19 @@ async def show_preview(message: Message, state: FSMContext):
 @router.callback_query(F.data == "confirm_publish")
 async def confirm_ad(callback: CallbackQuery, state: FSMContext):
     logger.info("[PUBLISH] confirm_ad")
-    
+
     data = await state.get_data()
-    
+
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except:
         pass
-    
-    await callback.answer("⏳ Публикуем...")
-    
+
+    await callback.answer()
+
+    # Показываем спиннер
+    spinner_msg = await callback.message.answer("⏳ <b>Публикую объявление...</b>\n\nПожалуйста, подождите")
+
     try:
         bot_info = await callback.message.bot.get_me()
         
