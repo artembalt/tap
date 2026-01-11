@@ -141,11 +141,10 @@ async def _send_welcome(message: Message):
 
 async def show_seller_profile(message: Message, seller_id: int):
     """Показать профиль продавца с просмотрами и кликабельными объявлениями"""
-    import asyncio
-    from aiogram.exceptions import TelegramNetworkError
-    
+    from shared.regions_config import CHANNELS_CONFIG
+
     logger.info(f"Показ профиля продавца: {seller_id}")
-    
+
     try:
         async with get_db_session() as session:
             # Получаем данные продавца
@@ -153,11 +152,15 @@ async def show_seller_profile(message: Message, seller_id: int):
                 select(User).where(User.telegram_id == seller_id)
             )
             seller = result.scalar_one_or_none()
-            
+
             if not seller:
                 await message.answer("❌ Продавец не найден")
                 return
-            
+
+            # Инкрементируем просмотры профиля
+            seller.profile_views = (seller.profile_views or 0) + 1
+            await session.commit()
+
             # Получаем активные объявления
             active_ads_result = await session.execute(
                 select(Ad).where(
@@ -166,7 +169,7 @@ async def show_seller_profile(message: Message, seller_id: int):
                 ).order_by(Ad.created_at.desc())
             )
             active_ads = active_ads_result.scalars().all()
-            
+
             # Получаем количество завершённых (архив + удалённые)
             completed_count_result = await session.execute(
                 select(func.count(Ad.id)).where(
@@ -175,41 +178,63 @@ async def show_seller_profile(message: Message, seller_id: int):
                 )
             )
             completed_count = completed_count_result.scalar() or 0
-            
-            # Формируем имя
+
+            # Формируем имя (кликабельное, если есть username)
             seller_name = seller.first_name or "Пользователь"
             if seller.last_name:
                 seller_name += f" {seller.last_name}"
-            
-            # Username
-            username_text = f"@{seller.username}" if seller.username else "не указан"
-            
+
+            # Делаем имя кликабельным через username
+            if seller.username:
+                seller_name_display = f"<a href=\"https://t.me/{seller.username}\">{seller_name}</a>"
+            else:
+                seller_name_display = seller_name
+
             # Дата регистрации
             reg_date = seller.created_at.strftime("%d.%m.%Y") if seller.created_at else "неизвестно"
-            
-            # Получаем username бота для ссылок
-            bot_info = await message.bot.get_me()
-            bot_username = bot_info.username
-            
-            # Формируем список объявлений с КЛИКАБЕЛЬНЫМИ ссылками
+
+            # Формируем список объявлений с ссылками на каналы категорий
             ads_list = ""
             if active_ads:
-                for i, ad in enumerate(active_ads[:10], 1):
-                    title = ad.title[:35] + "..." if len(ad.title) > 35 else ad.title
-                    # Ссылка на объявление через deep link
-                    ad_link = f"https://t.me/{bot_username}?start=ad_{ad.id}"
-                    ads_list += f"  {i}. <a href=\"{ad_link}\">{title}</a>\n"
+                for i, ad in enumerate(active_ads, 1):
+                    title = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
+
+                    # Пытаемся получить ссылку на объявление в канале категории
+                    ad_link = None
+                    channel_msgs = ad.channel_message_ids or {}
+
+                    # Сначала ищем канал категории
+                    region_config = CHANNELS_CONFIG.get(ad.region, {})
+                    category_channels = region_config.get("categories", {})
+                    category_channel = category_channels.get(ad.category, "")
+
+                    if category_channel and category_channel in channel_msgs:
+                        msg_id = channel_msgs[category_channel]
+                        channel_username = category_channel.replace("@", "")
+                        ad_link = f"https://t.me/{channel_username}/{msg_id}"
+                    elif channel_msgs:
+                        # Берём первый доступный канал
+                        for channel, msg_id in channel_msgs.items():
+                            if channel.startswith("@"):
+                                channel_username = channel.replace("@", "")
+                                ad_link = f"https://t.me/{channel_username}/{msg_id}"
+                                break
+
+                    if ad_link:
+                        ads_list += f"  {i}. <a href=\"{ad_link}\">{title}</a>\n"
+                    else:
+                        ads_list += f"  {i}. {title}\n"
             else:
                 ads_list = "  Нет активных объявлений\n"
-            
+
             profile_text = f"""👤 <b>Профиль продавца</b>
 
 🆔 ID: <code>{seller_id}</code>
-👤 Имя: {seller_name}
-📱 Username: {username_text}
+👤 Имя: {seller_name_display}
 📅 Регистрация: {reg_date}
 
 📊 <b>Статистика:</b>
+• Просмотров профиля: {seller.profile_views or 0}
 • Активных объявлений: {len(active_ads)}
 • Завершённых: {completed_count}
 
@@ -223,7 +248,7 @@ async def show_seller_profile(message: Message, seller_id: int):
                 disable_web_page_preview=True
             )
             logger.info(f"Профиль {seller_id} показан успешно")
-            
+
     except Exception as e:
         logger.error(f"Ошибка при показе профиля: {e}", exc_info=True)
         await message.answer("❌ Ошибка при загрузке профиля. Попробуйте ещё раз.")
