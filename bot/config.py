@@ -57,6 +57,17 @@ class Settings:
     # Веб-интерфейс
     WEB_DOMAIN: str = os.getenv("WEB_DOMAIN", "proday39.ru")
     WEB_URL: str = f"https://{WEB_DOMAIN}"
+
+    # Webhook конфигурация
+    WEBHOOK_DOMAIN: str = os.getenv("WEBHOOK_DOMAIN", "prodaybot.ru")
+    WEBHOOK_PATH: str = os.getenv("WEBHOOK_PATH", "/webhook/bot")
+    WEBHOOK_HOST: str = os.getenv("WEBHOOK_HOST", "127.0.0.1")
+    WEBHOOK_PORT: int = int(os.getenv("WEBHOOK_PORT", "8080"))
+
+    @property
+    def webhook_url(self) -> str:
+        """Получить полный URL вебхука"""
+        return f"https://{self.WEBHOOK_DOMAIN}{self.WEBHOOK_PATH}"
     
     # Файлы и медиа
     UPLOAD_DIR: Path = Path("uploads")

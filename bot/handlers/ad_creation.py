@@ -102,18 +102,21 @@ async def ask_region(message: Message, state: FSMContext):
 async def process_region(callback: CallbackQuery, state: FSMContext):
     """Обработка выбора региона"""
     logger.info(f"[REGION] process_region: data={callback.data}, user={callback.from_user.id}")
-    
+
     region = callback.data.replace("region_", "")
+
+    # Валидация: проверяем что регион существует
+    if region not in REGIONS:
+        logger.warning(f"[REGION] Неизвестный регион: {region}")
+        await callback.answer("❌ Неизвестный регион", show_alert=True)
+        return
+
     await state.update_data(region=region)
-    
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except Exception as e:
-        logger.warning(f"[REGION] edit_reply_markup: {e}")
-    
-    region_name = REGIONS.get(region, region)
+    await safe_clear_keyboard(callback)
+
+    region_name = REGIONS.get(region)
     await callback.message.answer(f"✅ <b>Регион:</b> {region_name}")
-    
+
     await ask_city(callback.message, state, region)
     await callback.answer()
 
@@ -133,18 +136,23 @@ async def ask_city(message: Message, state: FSMContext, region: str):
 @router.callback_query(F.data.startswith("city_"))
 async def process_city(callback: CallbackQuery, state: FSMContext):
     logger.info(f"[CITY] process_city: {callback.data}")
-    
+
     city = callback.data.replace("city_", "")
     data = await state.get_data()
     region = data.get('region', '')
-    
+
+    # Валидация: проверяем что город существует в этом регионе
+    if region not in CITIES or city not in CITIES.get(region, {}):
+        logger.warning(f"[CITY] Неизвестный город: {city} в регионе {region}")
+        await callback.answer("❌ Неизвестный город", show_alert=True)
+        return
+
     await state.update_data(city=city)
-    
     await safe_clear_keyboard(callback)
-    
-    city_name = CITIES.get(region, {}).get(city, city)
+
+    city_name = CITIES[region][city]
     await callback.message.answer(f"✅ <b>Город:</b> {city_name}")
-    
+
     await ask_category(callback.message, state)
     await callback.answer()
 
@@ -172,15 +180,21 @@ async def ask_category(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("category_"))
 async def process_category(callback: CallbackQuery, state: FSMContext):
     logger.info(f"[CATEGORY] process_category: {callback.data}")
-    
+
     category = callback.data.replace("category_", "")
+
+    # Валидация: проверяем что категория существует
+    if category not in CATEGORIES:
+        logger.warning(f"[CATEGORY] Неизвестная категория: {category}")
+        await callback.answer("❌ Неизвестная категория", show_alert=True)
+        return
+
     await state.update_data(category=category)
-    
     await safe_clear_keyboard(callback)
-    
-    category_name = CATEGORIES.get(category, category)
+
+    category_name = CATEGORIES[category]
     await callback.message.answer(f"✅ <b>Категория:</b> {category_name}")
-    
+
     await ask_subcategory(callback.message, state, category)
     await callback.answer()
 
@@ -210,18 +224,23 @@ async def ask_subcategory(message: Message, state: FSMContext, category: str):
 @router.callback_query(F.data.startswith("subcategory_"))
 async def process_subcategory(callback: CallbackQuery, state: FSMContext):
     logger.info(f"[SUBCATEGORY] process_subcategory: {callback.data}")
-    
+
     subcategory = callback.data.replace("subcategory_", "")
     data = await state.get_data()
     category = data.get('category', '')
-    
+
+    # Валидация: проверяем что рубрика существует в этой категории
+    if category not in SUBCATEGORIES or subcategory not in SUBCATEGORIES.get(category, {}):
+        logger.warning(f"[SUBCATEGORY] Неизвестная рубрика: {subcategory} в категории {category}")
+        await callback.answer("❌ Неизвестная рубрика", show_alert=True)
+        return
+
     await state.update_data(subcategory=subcategory)
-    
     await safe_clear_keyboard(callback)
-    
-    subcategory_name = SUBCATEGORIES.get(category, {}).get(subcategory, subcategory)
+
+    subcategory_name = SUBCATEGORIES[category][subcategory]
     await callback.message.answer(f"✅ <b>Рубрика:</b> {subcategory_name}")
-    
+
     await ask_deal_type(callback.message, state)
     await callback.answer()
 

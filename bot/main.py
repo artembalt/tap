@@ -33,11 +33,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-WEBHOOK_PATH = "/webhook/bot"
-DOMAIN = "prodaybot.ru"
-WEBHOOK_URL = f"https://{DOMAIN}{WEBHOOK_PATH}"
-WEB_SERVER_HOST = "127.0.0.1"
-WEB_SERVER_PORT = 8080
+# Webhook конфигурация из settings
+WEBHOOK_PATH = settings.WEBHOOK_PATH
+WEBHOOK_URL = settings.webhook_url
+WEB_SERVER_HOST = settings.WEBHOOK_HOST
+WEB_SERVER_PORT = settings.WEBHOOK_PORT
 
 
 class RetryMiddleware(BaseMiddleware):
