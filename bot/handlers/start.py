@@ -292,14 +292,18 @@ async def show_ad_detail(message: Message, ad_id: str):
                 select(Ad).where(Ad.id == ad_uuid)
             )
             ad = result.scalar_one_or_none()
-            
+
             if not ad:
                 await message.answer("❌ Объявление не найдено")
                 return
-            
+
             if ad.status != AdStatus.ACTIVE.value:
                 await message.answer("❌ Объявление неактивно или удалено")
                 return
+
+            # Инкрементируем просмотры объявления
+            ad.views_count = (ad.views_count or 0) + 1
+            await session.commit()
             
             # Получаем данные продавца
             seller_result = await session.execute(
