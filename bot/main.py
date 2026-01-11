@@ -70,26 +70,39 @@ class RawUpdateLogger(BaseMiddleware):
         return await handler(event, data)
 
 
+async def keepalive_task(bot: Bot):
+    """Фоновая задача для поддержания соединения с Telegram API"""
+    while True:
+        await asyncio.sleep(30)  # Каждые 30 секунд
+        try:
+            await bot.get_me()
+        except Exception:
+            pass  # Игнорируем ошибки - главное держать соединение активным
+
+
 async def on_startup(bot: Bot):
     logger.info("=" * 60)
     logger.info("ЗАПУСК БОТА")
     logger.info("=" * 60)
-    
+
     await init_db()
     await set_bot_commands(bot)
-    
+
     try:
         me = await bot.get_me()
         logger.info(f"Бот: @{me.username}")
     except Exception as e:
         logger.warning(f"Прогрев: {e}")
-    
+
     await bot.set_webhook(
         url=WEBHOOK_URL,
         drop_pending_updates=True,
         allowed_updates=["message", "callback_query"]
     )
     logger.info(f"Webhook: {WEBHOOK_URL}")
+
+    # Запускаем фоновую задачу для поддержания соединения
+    asyncio.create_task(keepalive_task(bot))
 
 
 async def on_shutdown(bot: Bot):
