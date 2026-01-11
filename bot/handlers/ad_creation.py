@@ -770,33 +770,34 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
                 await session.execute(stmt)
                 await session.commit()
 
-        # Формируем сообщение с категорией и ссылкой
+        # Формируем сообщение с категорией и ссылками
         category = data.get('category', '')
         category_name = CATEGORIES.get(category, category)
         region = data.get('region', '')
 
-        # Получаем ссылку на объявление в канале категории
+        # Получаем конфигурацию каналов
         channel_config = CHANNELS_CONFIG.get(region, {})
         category_channel = channel_config.get('categories', {}).get(category, '')
+        main_channel = channel_config.get('main', '')
 
         result_text = f"✅ <b>Опубликовано!</b>\n\n"
         result_text += f"🆔 ID: <code>{ad_id}</code>\n"
 
+        # Ссылка на канал категории
         if category_channel and category_channel in channel_ids:
             msg_id = channel_ids[category_channel]
             channel_username = category_channel.replace("@", "")
             ad_link = f"https://t.me/{channel_username}/{msg_id}"
-            result_text += f"📂 Категория: <a href=\"{ad_link}\">{category_name}</a>"
-        elif channel_ids:
-            # Берём первый доступный канал
-            for channel, msg_id in channel_ids.items():
-                if channel.startswith("@"):
-                    channel_username = channel.replace("@", "")
-                    ad_link = f"https://t.me/{channel_username}/{msg_id}"
-                    result_text += f"📂 Категория: <a href=\"{ad_link}\">{category_name}</a>"
-                    break
+            result_text += f"📂 Категория: <a href=\"{ad_link}\">{category_name}</a>\n"
         else:
-            result_text += f"📂 Категория: {category_name}"
+            result_text += f"📂 Категория: {category_name}\n"
+
+        # Ссылка на общий канал
+        if main_channel and main_channel in channel_ids:
+            msg_id = channel_ids[main_channel]
+            channel_username = main_channel.replace("@", "")
+            ad_link = f"https://t.me/{channel_username}/{msg_id}"
+            result_text += f"📢 Общий канал: <a href=\"{ad_link}\">{main_channel}</a>"
 
         await callback.message.answer(result_text, disable_web_page_preview=True)
         
