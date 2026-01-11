@@ -141,13 +141,19 @@ async def main():
     )
     
     dp = Dispatcher(storage=storage)
-    
+
     # Middleware
+    antiflood = AntiFloodMiddleware(
+        rate_limit=5,        # 5 сообщений
+        period=10,           # за 10 секунд
+        block_duration=30,   # блокировка на 30 сек
+        redis=redis
+    )
     dp.update.outer_middleware(RawUpdateLogger())
     dp.message.outer_middleware(RetryMiddleware())
     dp.callback_query.outer_middleware(RetryMiddleware())
-    dp.message.middleware(AntiFloodMiddleware())
-    dp.callback_query.middleware(AntiFloodMiddleware())
+    dp.message.middleware(antiflood)
+    dp.callback_query.middleware(antiflood)
     dp.message.middleware(AuthMiddleware())
     
     # Роутеры
