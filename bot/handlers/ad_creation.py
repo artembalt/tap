@@ -922,7 +922,7 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
             except TelegramNetworkError as e:
                 if attempt < 1:
                     logger.warning(f"[CHANNEL] {channel} ошибка (попытка {attempt+1}), повтор: {e}")
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(0.5)
                 else:
                     logger.error(f"[CHANNEL] ошибка {channel}: {e}")
             except Exception as e:
