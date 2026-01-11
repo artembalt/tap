@@ -80,8 +80,8 @@ async def on_shutdown(bot: Bot):
     for admin_id in settings.ADMIN_IDS:
         try:
             await bot.send_message(admin_id, "⚠️ Бот остановлен")
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Не удалось уведомить админа {admin_id}: {e}")
     
     await bot.session.close()
 

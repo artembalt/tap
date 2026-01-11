@@ -127,6 +127,11 @@ class User(Base):
     __table_args__ = (
         Index('idx_user_role', 'role'),
         Index('idx_user_created', 'created_at'),
+        Index('idx_user_email', 'email'),
+        Index('idx_user_phone', 'phone'),
+        Index('idx_user_banned', 'is_banned'),
+        Index('idx_user_premium', 'is_premium'),
+        Index('idx_user_last_activity', 'last_activity'),
     )
 
 class Ad(Base):
@@ -197,6 +202,8 @@ class Ad(Base):
         Index('idx_ad_status_region_category', 'status', 'region', 'category'),
         Index('idx_ad_user_status', 'user_id', 'status'),
         Index('idx_ad_created', 'created_at'),
+        Index('idx_ad_expires', 'expires_at'),
+        Index('idx_ad_published', 'published_at'),
         Index('idx_ad_search', 'title', 'description'),  # Для поиска
     )
 
@@ -232,6 +239,7 @@ class Payment(Base):
     __table_args__ = (
         Index('idx_payment_user_status', 'user_id', 'status'),
         Index('idx_payment_created', 'created_at'),
+        Index('idx_payment_expires', 'expires_at'),
     )
 
 class Report(Base):

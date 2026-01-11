@@ -7,7 +7,7 @@ def validate_price(price_text: str) -> Optional[float]:
     try:
         price_text = re.sub(r'[^\d.]', '', price_text)
         return float(price_text)
-    except:
+    except (ValueError, TypeError):
         return None
 
 def validate_phone(phone: str) -> Optional[str]:
