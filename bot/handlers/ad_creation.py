@@ -15,15 +15,15 @@ from bot.database.connection import get_db_session
 from bot.database.models import Ad, AdStatus
 
 
-async def send_with_retry(message: Message, text: str, reply_markup=None, max_retries: int = 5):
-    """Отправка сообщения с retry для обхода cold start"""
+async def send_with_retry(message: Message, text: str, reply_markup=None, max_retries: int = 2):
+    """Отправка сообщения с retry"""
     for attempt in range(max_retries):
         try:
             return await message.answer(text, reply_markup=reply_markup)
         except TelegramNetworkError as e:
             if attempt < max_retries - 1:
                 logger.warning(f"Сетевая ошибка (попытка {attempt+1}), повтор: {e}")
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(1)
             else:
                 logger.error(f"Не удалось отправить сообщение: {e}")
                 raise
@@ -691,20 +691,12 @@ async def show_preview(message: Message, state: FSMContext):
 <b>Опубликовать?</b>"""
 
     from bot.keyboards.inline import get_confirm_with_edit_keyboard
-    from aiogram.exceptions import TelegramNetworkError
 
-    # Retry отправки сообщения (до 5 попыток с коротким интервалом)
-    for attempt in range(5):
-        try:
-            await message.answer(text, reply_markup=get_confirm_with_edit_keyboard())
-            return
-        except TelegramNetworkError as e:
-            if attempt < 4:
-                logger.warning(f"[PREVIEW] Сетевая ошибка (попытка {attempt+1}), повтор: {e}")
-                await asyncio.sleep(0.2)
-            else:
-                logger.error(f"[PREVIEW] Не удалось отправить превью: {e}")
-                await message.answer("⚠️ Ошибка сети. Попробуйте ещё раз.")
+    try:
+        await message.answer(text, reply_markup=get_confirm_with_edit_keyboard())
+    except TelegramNetworkError as e:
+        logger.error(f"[PREVIEW] Сетевая ошибка: {e}")
+        await message.answer("⚠️ Ошибка сети. Попробуйте ещё раз.")
 
 
 # ========== ПУБЛИКАЦИЯ ==========
@@ -905,8 +897,8 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
         channels.append(main_channel)
     
     for channel in channels:
-        # Retry для каждого канала (до 5 попыток)
-        for attempt in range(5):
+        # Retry для каждого канала (2 попытки)
+        for attempt in range(2):
             try:
                 if photos:
                     if len(photos) == 1:
@@ -925,17 +917,17 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
                 if msg:
                     channel_ids[channel] = msg.message_id
                     logger.info(f"[CHANNEL] опубликовано в {channel}, msg_id={msg.message_id}")
-                break  # Успех - выходим из retry
+                break  # Успех
 
             except TelegramNetworkError as e:
-                if attempt < 4:
-                    logger.warning(f"[CHANNEL] {channel} таймаут (попытка {attempt+1}), повтор: {e}")
-                    await asyncio.sleep(0.3)
+                if attempt < 1:
+                    logger.warning(f"[CHANNEL] {channel} ошибка (попытка {attempt+1}), повтор: {e}")
+                    await asyncio.sleep(2)
                 else:
-                    logger.error(f"[CHANNEL] ошибка {channel} после 5 попыток: {e}")
+                    logger.error(f"[CHANNEL] ошибка {channel}: {e}")
             except Exception as e:
                 logger.error(f"[CHANNEL] ошибка {channel}: {e}")
-                break  # Другая ошибка - не повторяем
+                break
     
     return channel_ids
 
