@@ -3,10 +3,12 @@
 
 import logging
 import time
+import asyncio
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.fsm.context import FSMContext
+from aiogram.exceptions import TelegramNetworkError
 from sqlalchemy import select, func
 
 from bot.keyboards.inline import get_main_menu_keyboard, get_back_keyboard
@@ -84,7 +86,7 @@ async def cmd_start(message: Message, state: FSMContext):
 
 
 async def _send_welcome(message: Message):
-    """Отправка приветственного сообщения"""
+    """Отправка приветственного сообщения с retry"""
     # Получаем или создаем пользователя
     user = await UserQueries.get_or_create_user(
         telegram_id=message.from_user.id,
@@ -92,7 +94,7 @@ async def _send_welcome(message: Message):
         first_name=message.from_user.first_name,
         last_name=message.from_user.last_name
     )
-    
+
     welcome_text = f"""
 👋 Добро пожаловать, {message.from_user.first_name}!
 
@@ -105,16 +107,36 @@ async def _send_welcome(message: Message):
 
 🚀 <b>Выберите действие из меню ниже:</b>
 """
-    
-    await message.answer(
-        welcome_text,
-        reply_markup=get_main_reply_keyboard()
-    )
-    
-    await message.answer(
-        "📍 Выберите нужный раздел:",
-        reply_markup=get_main_menu_keyboard()
-    )
+
+    # Retry для первого сообщения (cold start fix)
+    for attempt in range(3):
+        try:
+            await message.answer(
+                welcome_text,
+                reply_markup=get_main_reply_keyboard()
+            )
+            break
+        except TelegramNetworkError as e:
+            if attempt < 2:
+                logger.warning(f"[START] Сетевая ошибка (попытка {attempt+1}), повтор: {e}")
+                await asyncio.sleep(0.3)
+            else:
+                logger.error(f"[START] Не удалось отправить приветствие: {e}")
+                return
+
+    # Retry для второго сообщения
+    for attempt in range(3):
+        try:
+            await message.answer(
+                "📍 Выберите нужный раздел:",
+                reply_markup=get_main_menu_keyboard()
+            )
+            break
+        except TelegramNetworkError as e:
+            if attempt < 2:
+                await asyncio.sleep(0.3)
+            else:
+                logger.error(f"[START] Не удалось отправить меню: {e}")
 
 
 async def show_seller_profile(message: Message, seller_id: int):

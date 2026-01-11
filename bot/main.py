@@ -107,12 +107,12 @@ async def main():
     )
     storage = RedisStorage(redis=redis)
     
-    # Короткие таймауты чтобы не зависать
+    # Очень короткие таймауты для быстрого retry при cold start
     timeout = ClientTimeout(
-        total=10,
-        connect=3,
-        sock_read=5,
-        sock_connect=3
+        total=8,
+        connect=2,
+        sock_read=3,
+        sock_connect=2
     )
 
     session = AiohttpSession(timeout=timeout)

@@ -581,15 +581,15 @@ async def show_preview(message: Message, state: FSMContext):
     from bot.keyboards.inline import get_confirm_with_edit_keyboard
     from aiogram.exceptions import TelegramNetworkError
 
-    # Retry отправки сообщения (до 3 попыток с коротким интервалом)
-    for attempt in range(3):
+    # Retry отправки сообщения (до 5 попыток с коротким интервалом)
+    for attempt in range(5):
         try:
             await message.answer(text, reply_markup=get_confirm_with_edit_keyboard())
             return
         except TelegramNetworkError as e:
-            if attempt < 2:
+            if attempt < 4:
                 logger.warning(f"[PREVIEW] Сетевая ошибка (попытка {attempt+1}), повтор: {e}")
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.2)
             else:
                 logger.error(f"[PREVIEW] Не удалось отправить превью: {e}")
                 await message.answer("⚠️ Ошибка сети. Попробуйте ещё раз.")
