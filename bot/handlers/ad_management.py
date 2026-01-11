@@ -155,7 +155,7 @@ async def show_user_ads(message: Message, user_id: int, offset: int = 0, edit: b
         else:
             text += f"{i}. {status_emoji} {title_display}\n"
 
-        text += f"   💰 {price_text} | 👁 {ad.views_count or 0}\n\n"
+        text += f"   💰 {price_text}\n\n"
 
     text += "👆 Нажмите на заголовок чтобы открыть объявление в канале"
 

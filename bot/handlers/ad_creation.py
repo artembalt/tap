@@ -865,7 +865,7 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
     
     hashtags_text = " ".join(hashtags) if hashtags else ""
     
-    # ===== ИСПРАВЛЕНИЕ 2: Текст объявления с ссылками =====
+    # ===== Текст объявления с ссылкой на профиль =====
     text = f"""<b>{data.get('title', '')}</b>
 
 {data.get('description', '')}
@@ -875,7 +875,6 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
 {hashtags_text}
 
 ━━━━━━━━━━━━━━━
-📋 <a href="https://t.me/{bot_info.username}?start=ad_{ad.id}">Подробнее</a>
 😎 <a href="tg://user?id={ad.user_id}">Написать продавцу</a>
 👾 <a href="https://t.me/{bot_info.username}?start=profile_{ad.user_id}">Профиль продавца</a>
 📢 <a href="https://t.me/{bot_info.username}">Разместить объявление</a>"""
