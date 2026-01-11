@@ -9,10 +9,26 @@ from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InputMediaPhoto, InputMediaVideo
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramNetworkError, TelegramAPIError
 
 from bot.database.connection import get_db_session
 from bot.database.models import Ad, AdStatus
+from shared.regions_config import (
+    REGIONS, CITIES, CATEGORIES, SUBCATEGORIES, DEAL_TYPES,
+    CONDITION_TYPES, DELIVERY_TYPES, CATEGORIES_WITH_DELIVERY,
+    DEAL_TYPES_WITH_CONDITION, CHANNELS_CONFIG,
+    get_city_hashtag, get_subcategory_hashtag
+)
+
+logger = logging.getLogger(__name__)
+
+
+async def safe_clear_keyboard(callback: CallbackQuery) -> None:
+    """Безопасно удаляет клавиатуру у сообщения"""
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramAPIError as e:
+        logger.debug(f"Не удалось убрать клавиатуру: {e}")
 
 
 async def send_with_retry(message: Message, text: str, reply_markup=None, max_retries: int = 2):
@@ -29,16 +45,7 @@ async def send_with_retry(message: Message, text: str, reply_markup=None, max_re
                 raise
 
 
-from shared.regions_config import (
-    REGIONS, CITIES, CATEGORIES, SUBCATEGORIES, DEAL_TYPES,
-    CONDITION_TYPES, DELIVERY_TYPES, CATEGORIES_WITH_DELIVERY,
-    DEAL_TYPES_WITH_CONDITION, CHANNELS_CONFIG,
-    get_city_hashtag, get_subcategory_hashtag
-)
-
-logger = logging.getLogger(__name__)
 router = Router(name='ad_creation')
-
 logger.info("ad_creation.router создан")
 
 
@@ -133,10 +140,7 @@ async def process_city(callback: CallbackQuery, state: FSMContext):
     
     await state.update_data(city=city)
     
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     
     city_name = CITIES.get(region, {}).get(city, city)
     await callback.message.answer(f"✅ <b>Город:</b> {city_name}")
@@ -148,10 +152,7 @@ async def process_city(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "back_to_region")
 async def back_to_region(callback: CallbackQuery, state: FSMContext):
     logger.info("[BACK] back_to_region")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     await ask_region(callback.message, state)
     await callback.answer()
 
@@ -175,10 +176,7 @@ async def process_category(callback: CallbackQuery, state: FSMContext):
     category = callback.data.replace("category_", "")
     await state.update_data(category=category)
     
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     
     category_name = CATEGORIES.get(category, category)
     await callback.message.answer(f"✅ <b>Категория:</b> {category_name}")
@@ -190,10 +188,7 @@ async def process_category(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "back_to_city")
 async def back_to_city(callback: CallbackQuery, state: FSMContext):
     logger.info("[BACK] back_to_city")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     data = await state.get_data()
     region = data.get('region', '')
     await ask_city(callback.message, state, region)
@@ -222,10 +217,7 @@ async def process_subcategory(callback: CallbackQuery, state: FSMContext):
     
     await state.update_data(subcategory=subcategory)
     
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     
     subcategory_name = SUBCATEGORIES.get(category, {}).get(subcategory, subcategory)
     await callback.message.answer(f"✅ <b>Рубрика:</b> {subcategory_name}")
@@ -237,10 +229,7 @@ async def process_subcategory(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "back_to_category")
 async def back_to_category(callback: CallbackQuery, state: FSMContext):
     logger.info("[BACK] back_to_category")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     await ask_category(callback.message, state)
     await callback.answer()
 
@@ -264,10 +253,7 @@ async def process_deal_type(callback: CallbackQuery, state: FSMContext):
     deal_type = callback.data.replace("deal_", "")
     await state.update_data(deal_type=deal_type)
     
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     
     deal_type_name = DEAL_TYPES.get(deal_type, deal_type)
     await callback.message.answer(f"✅ <b>Тип:</b> {deal_type_name}")
@@ -279,10 +265,7 @@ async def process_deal_type(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "back_to_subcategory")
 async def back_to_subcategory(callback: CallbackQuery, state: FSMContext):
     logger.info("[BACK] back_to_subcategory")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     data = await state.get_data()
     category = data.get('category', '')
     await ask_subcategory(callback.message, state, category)
@@ -359,10 +342,7 @@ async def process_condition(callback: CallbackQuery, state: FSMContext):
     condition = callback.data.replace("condition_", "")
     await state.update_data(condition=condition)
     
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     
     condition_name = CONDITION_TYPES.get(condition, condition)
     await callback.message.answer(f"✅ <b>Состояние:</b> {condition_name}")
@@ -447,10 +427,7 @@ async def process_photo(message: Message, state: FSMContext):
 @router.callback_query(F.data == "photos_skip")
 async def skip_photos(callback: CallbackQuery, state: FSMContext):
     logger.info("[PHOTOS] skip")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     await callback.message.answer("✅ <b>Фото:</b> пропущено")
     await ask_video(callback.message, state)
     await callback.answer()
@@ -459,10 +436,7 @@ async def skip_photos(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "photos_done")
 async def photos_done(callback: CallbackQuery, state: FSMContext):
     logger.info("[PHOTOS] done")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     
     data = await state.get_data()
     count = len(data.get('photos', []))
@@ -514,10 +488,7 @@ async def process_video(message: Message, state: FSMContext):
 @router.callback_query(F.data == "video_skip")
 async def skip_video(callback: CallbackQuery, state: FSMContext):
     logger.info("[VIDEO] skip")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     await ask_price(callback.message, state)
     await callback.answer()
 
@@ -563,10 +534,7 @@ async def process_price(message: Message, state: FSMContext):
 async def price_confirm(callback: CallbackQuery, state: FSMContext):
     """Подтверждение цены - переход к превью"""
     logger.info("[PRICE] confirm")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
 
     data = await state.get_data()
     await callback.message.answer(f"✅ <b>Цена:</b> {data.get('price')}")
@@ -585,10 +553,7 @@ async def price_confirm(callback: CallbackQuery, state: FSMContext):
 async def price_change(callback: CallbackQuery, state: FSMContext):
     """Изменить цену - вернуться к вводу"""
     logger.info("[PRICE] change")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
 
     await callback.message.answer("💰 Введите новую цену:")
     await callback.answer()
@@ -598,10 +563,7 @@ async def price_change(callback: CallbackQuery, state: FSMContext):
 async def price_negotiable(callback: CallbackQuery, state: FSMContext):
     """Договорная цена при первом запросе"""
     logger.info("[PRICE] negotiable")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
 
     await state.update_data(price="Договорная")
     await callback.message.answer("✅ <b>Цена:</b> Договорная")
@@ -619,10 +581,7 @@ async def price_negotiable(callback: CallbackQuery, state: FSMContext):
 async def price_negotiable_confirm(callback: CallbackQuery, state: FSMContext):
     """Договорная цена при подтверждении"""
     logger.info("[PRICE] negotiable from confirm")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
 
     await state.update_data(price="Договорная")
     await callback.message.answer("✅ <b>Цена:</b> Договорная")
@@ -655,10 +614,7 @@ async def process_delivery(callback: CallbackQuery, state: FSMContext):
     delivery = callback.data.replace("delivery_", "")
     await state.update_data(delivery=delivery)
     
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     
     delivery_name = DELIVERY_TYPES.get(delivery, delivery)
     await callback.message.answer(f"✅ <b>Доставка:</b> {delivery_name}")
@@ -706,10 +662,7 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
 
     data = await state.get_data()
 
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
 
     await callback.answer()
 
@@ -725,8 +678,8 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
             if price_str != 'Договорная':
                 try:
                     price_value = float(price_str.replace(' ₽', '').replace(' ', ''))
-                except:
-                    pass
+                except (ValueError, AttributeError):
+                    logger.warning(f"Не удалось распарсить цену: {price_str}")
             
             ad = Ad(
                 id=uuid.uuid4(),
@@ -814,10 +767,7 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "cancel_ad")
 async def cancel_ad(callback: CallbackQuery, state: FSMContext):
     logger.info("[CANCEL] cancel_ad")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     await state.clear()
     await callback.message.answer("❌ Отменено.")
     await callback.answer()
@@ -826,10 +776,7 @@ async def cancel_ad(callback: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data == "edit_ad")
 async def edit_ad_preview(callback: CallbackQuery, state: FSMContext):
     logger.info("[EDIT] edit_ad")
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     await callback.message.answer("✏️ Редактирование в разработке.")
     await callback.answer()
 
@@ -947,9 +894,6 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
 async def cancel_creation(callback: CallbackQuery, state: FSMContext):
     logger.info("[CANCEL] cancel")
     await state.clear()
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except:
-        pass
+    await safe_clear_keyboard(callback)
     await callback.message.answer("❌ Отменено.")
     await callback.answer()
