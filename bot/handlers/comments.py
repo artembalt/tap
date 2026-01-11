@@ -99,7 +99,7 @@ async def notify_seller(bot: Bot, ad: Ad, comment: Message):
         for channel, msg_id in channel_msgs.items():
             if channel.startswith("@"):
                 channel_clean = channel.lstrip("@")
-                ad_link = f"https://t.me/{channel_clean}/{msg_id}?comment={comment.message_id}"
+                ad_link = f"https://t.me/{channel_clean}/{msg_id}"
                 break
 
         # Формируем заголовок (кликабельный если есть ссылка)
