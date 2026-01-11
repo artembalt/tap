@@ -794,12 +794,20 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
             ad_link = f"https://t.me/{channel_username}/{msg_id}"
             result_text += f"📢 Общий канал: <a href=\"{ad_link}\">{main_channel}</a>"
 
-        await callback.message.answer(result_text, disable_web_page_preview=True)
-        
+        # Заменяем спиннер на результат
+        try:
+            await spinner_msg.edit_text(result_text, disable_web_page_preview=True)
+        except:
+            await callback.message.answer(result_text, disable_web_page_preview=True)
+
     except Exception as e:
         logger.error(f"[PUBLISH] Ошибка: {e}", exc_info=True)
-        await callback.message.answer("❌ Ошибка. Попробуйте позже.")
-    
+        # Заменяем спиннер на ошибку
+        try:
+            await spinner_msg.edit_text("❌ Ошибка публикации. Попробуйте позже.")
+        except:
+            await callback.message.answer("❌ Ошибка. Попробуйте позже.")
+
     await state.clear()
 
 
