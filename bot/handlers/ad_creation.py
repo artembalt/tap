@@ -372,12 +372,10 @@ async def process_condition(callback: CallbackQuery, state: FSMContext):
 
 
 # ========== ФОТО (ИСПРАВЛЕНО - корректная обработка media groups) ==========
-_photo_locks = {}  # user_id -> asyncio.Lock для защиты от race condition
-
 async def ask_photos(message: Message, state: FSMContext):
     logger.info("[PHOTOS] ask_photos")
     await state.set_state(AdCreation.photos)
-    await state.update_data(photos=[], photo_msg_id=None, last_photo_update=0)
+    await state.update_data(photos=[], photo_msg_id=None, photo_batch_id=0)
 
     from bot.keyboards.inline import get_photo_skip_keyboard
     msg = await message.answer(
@@ -386,70 +384,64 @@ async def ask_photos(message: Message, state: FSMContext):
         "Загружено: 0/10",
         reply_markup=get_photo_skip_keyboard()
     )
-    # Сохраняем ID сообщения для обновления
     await state.update_data(photo_msg_id=msg.message_id)
 
 
 @router.message(AdCreation.photos, F.photo)
 async def process_photo(message: Message, state: FSMContext):
-    """Обработка фото с защитой от race condition при media groups"""
+    """Обработка фото с debounce для media groups"""
     import time
     from bot.keyboards.inline import get_photo_done_keyboard
 
-    user_id = message.from_user.id
+    data = await state.get_data()
+    photos = data.get("photos", [])
+    photo_msg_id = data.get("photo_msg_id")
 
-    # Получаем или создаём lock для пользователя
-    if user_id not in _photo_locks:
-        _photo_locks[user_id] = asyncio.Lock()
+    if len(photos) >= 10:
+        return
 
-    async with _photo_locks[user_id]:
-        data = await state.get_data()
-        photos = data.get("photos", [])
-        photo_msg_id = data.get("photo_msg_id")
+    # Добавляем фото
+    photo_id = message.photo[-1].file_id
+    if photo_id not in photos:
+        photos.append(photo_id)
 
-        if len(photos) >= 10:
-            return
+    # Генерируем новый batch_id для этой "волны" фото
+    batch_id = time.time()
+    await state.update_data(photos=photos, photo_batch_id=batch_id)
 
-        photo_id = message.photo[-1].file_id
-        if photo_id not in photos:
-            photos.append(photo_id)
-            await state.update_data(photos=photos, last_photo_update=time.time())
+    # Небольшая задержка для сбора всех фото из media group
+    await asyncio.sleep(0.4)
 
-        count = len(photos)
+    # Проверяем, что за это время не пришло новых фото (batch_id не изменился)
+    fresh_data = await state.get_data()
+    if fresh_data.get("photo_batch_id") != batch_id:
+        # Пришли новые фото, это обновление пропускаем
+        return
 
-        # Небольшая задержка для сбора всех фото из media group
-        await asyncio.sleep(0.3)
+    # Получаем актуальное количество
+    photos = fresh_data.get("photos", [])
+    count = len(photos)
 
-        # Проверяем что это последнее обновление (не было новых фото за 0.3 сек)
-        fresh_data = await state.get_data()
-        if fresh_data.get("last_photo_update", 0) != data.get("last_photo_update", 0):
-            # Было ещё обновление, пропускаем это
-            return
-
-        # Получаем актуальное количество после задержки
-        photos = fresh_data.get("photos", [])
-        count = len(photos)
-
-        # Обновляем сообщение с кнопкой "Далее"
-        try:
-            if photo_msg_id:
-                await message.bot.edit_message_text(
-                    chat_id=message.chat.id,
-                    message_id=photo_msg_id,
-                    text=f"📸 <b>Шаг 9: Фото</b>\n\n"
-                         f"✅ Загружено: {count}/10 фото\n\n"
-                         f"Отправьте ещё или нажмите <b>Далее</b>.",
-                    reply_markup=get_photo_done_keyboard()
-                )
-        except Exception as e:
-            if "message is not modified" not in str(e).lower():
-                logger.warning(f"[PHOTOS] Не удалось обновить сообщение: {e}")
-                # Fallback - отправляем новое сообщение
-                msg = await message.answer(
-                    f"✅ Загружено {count}/10 фото. Нажмите <b>Далее</b>.",
-                    reply_markup=get_photo_done_keyboard()
-                )
-                await state.update_data(photo_msg_id=msg.message_id)
+    # Обновляем сообщение с кнопкой "Далее"
+    try:
+        if photo_msg_id:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=photo_msg_id,
+                text=f"📸 <b>Шаг 9: Фото</b>\n\n"
+                     f"✅ Загружено: {count}/10 фото\n\n"
+                     f"Отправьте ещё или нажмите <b>Далее</b>.",
+                reply_markup=get_photo_done_keyboard()
+            )
+    except Exception as e:
+        if "message is not modified" not in str(e).lower():
+            logger.warning(f"[PHOTOS] Не удалось обновить сообщение: {e}")
+            # Fallback - отправляем новое сообщение
+            msg = await message.answer(
+                f"✅ Загружено {count}/10 фото. Нажмите <b>Далее</b>.",
+                reply_markup=get_photo_done_keyboard()
+            )
+            await state.update_data(photo_msg_id=msg.message_id)
 
 
 @router.callback_query(F.data == "photos_skip")
