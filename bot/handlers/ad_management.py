@@ -7,6 +7,7 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.exceptions import TelegramAPIError
 
 from bot.database.queries import AdQueries
 from bot.keyboards.inline import get_back_keyboard
@@ -57,7 +58,7 @@ async def show_user_ads(message: Message, user_id: int, edit: bool = False):
         if edit:
             try:
                 await message.edit_text(text, reply_markup=get_back_keyboard())
-            except:
+            except TelegramAPIError:
                 await message.answer(text, reply_markup=get_back_keyboard())
         else:
             await message.answer(text, reply_markup=get_back_keyboard())
@@ -77,7 +78,7 @@ async def show_user_ads(message: Message, user_id: int, edit: bool = False):
             else:
                 try:
                     await message.edit_text(text, reply_markup=get_back_keyboard())
-                except:
+                except TelegramAPIError:
                     await message.answer(text, reply_markup=get_back_keyboard())
         else:
             await message.answer(text, reply_markup=get_back_keyboard())
@@ -126,7 +127,7 @@ async def show_user_ads(message: Message, user_id: int, edit: bool = False):
         else:
             try:
                 await message.edit_text(text, reply_markup=get_back_keyboard(), disable_web_page_preview=True)
-            except:
+            except TelegramAPIError:
                 await message.answer(text, reply_markup=get_back_keyboard(), disable_web_page_preview=True)
     else:
         await message.answer(text, reply_markup=get_back_keyboard(), disable_web_page_preview=True)

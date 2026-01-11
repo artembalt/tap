@@ -750,7 +750,7 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
         # Заменяем спиннер на результат
         try:
             await spinner_msg.edit_text(result_text, disable_web_page_preview=True)
-        except:
+        except TelegramAPIError:
             await callback.message.answer(result_text, disable_web_page_preview=True)
 
     except Exception as e:
@@ -758,7 +758,7 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
         # Заменяем спиннер на ошибку
         try:
             await spinner_msg.edit_text("❌ Ошибка публикации. Попробуйте позже.")
-        except:
+        except TelegramAPIError:
             await callback.message.answer("❌ Ошибка. Попробуйте позже.")
 
     await state.clear()
