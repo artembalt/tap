@@ -88,13 +88,6 @@ async def find_ad_by_channel_message(channel_id: int, message_id: int):
 async def notify_seller(bot: Bot, ad: Ad, comment: Message):
     """Отправить уведомление продавцу о новом комментарии"""
     try:
-        # Формируем текст уведомления
-        commenter_name = comment.from_user.first_name or "Пользователь"
-        if comment.from_user.username:
-            commenter_link = f"<a href=\"https://t.me/{comment.from_user.username}\">{commenter_name}</a>"
-        else:
-            commenter_link = f"<a href=\"tg://user?id={comment.from_user.id}\">{commenter_name}</a>"
-
         # Обрезаем текст комментария если длинный
         comment_text = comment.text or comment.caption or "[медиа]"
         if len(comment_text) > 200:
@@ -109,18 +102,18 @@ async def notify_seller(bot: Bot, ad: Ad, comment: Message):
                 ad_link = f"https://t.me/{channel_clean}/{msg_id}?comment={comment.message_id}"
                 break
 
-        # Формируем сообщение
+        # Формируем заголовок (кликабельный если есть ссылка)
         title_short = ad.title[:50] + "..." if len(ad.title) > 50 else ad.title
+        if ad_link:
+            title_display = f"<a href=\"{ad_link}\">{title_short}</a>"
+        else:
+            title_display = f"<b>{title_short}</b>"
 
         notification_text = f"""💬 <b>Новый комментарий</b>
 
-📢 К объявлению: <b>{title_short}</b>
-👤 От: {commenter_link}
+📢 К объявлению: {title_display}
 
 <i>«{comment_text}»</i>"""
-
-        if ad_link:
-            notification_text += f"\n\n<a href=\"{ad_link}\">Открыть объявление</a>"
 
         # Отправляем уведомление продавцу
         await bot.send_message(
