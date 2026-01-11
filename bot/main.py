@@ -5,7 +5,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from aiohttp import web, ClientTimeout
+from aiohttp import web, ClientTimeout, TCPConnector
 
 from aiogram import Bot, Dispatcher, BaseMiddleware
 from aiogram.types import Update, TelegramObject, Message, CallbackQuery
