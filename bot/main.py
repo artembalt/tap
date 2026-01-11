@@ -116,6 +116,11 @@ async def main():
     )
 
     session = AiohttpSession(timeout=timeout)
+    # Настраиваем connector для избежания "протухших" соединений
+    session._connector_init.update({
+        'keepalive_timeout': 10,
+        'enable_cleanup_closed': True,
+    })
     bot = Bot(
         token=settings.BOT_TOKEN,
         session=session,
