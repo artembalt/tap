@@ -93,14 +93,28 @@ async def notify_seller(bot: Bot, ad: Ad, comment: Message):
         if len(comment_text) > 200:
             comment_text = comment_text[:200] + "..."
 
-        # Получаем ссылку на объявление в канале
+        # Получаем ссылку на объявление в канале категории
         ad_link = None
         channel_msgs = ad.channel_message_ids or {}
-        for channel, msg_id in channel_msgs.items():
-            if channel.startswith("@"):
-                channel_clean = channel.lstrip("@")
-                ad_link = f"https://t.me/{channel_clean}/{msg_id}"
-                break
+
+        # Сначала ищем канал категории (не main)
+        from shared.regions_config import CHANNELS_CONFIG
+        region_config = CHANNELS_CONFIG.get(ad.region, {})
+        main_channel = region_config.get("main", "")
+        category_channel = region_config.get("categories", {}).get(ad.category, "")
+
+        # Приоритет: канал категории, потом любой не-main
+        if category_channel and category_channel in channel_msgs:
+            channel_clean = category_channel.lstrip("@")
+            msg_id = channel_msgs[category_channel]
+            ad_link = f"https://t.me/{channel_clean}/{msg_id}"
+        else:
+            # Берём первый канал который не main
+            for channel, msg_id in channel_msgs.items():
+                if channel.startswith("@") and channel != main_channel:
+                    channel_clean = channel.lstrip("@")
+                    ad_link = f"https://t.me/{channel_clean}/{msg_id}"
+                    break
 
         # Формируем заголовок (кликабельный если есть ссылка)
         title_short = ad.title[:50] + "..." if len(ad.title) > 50 else ad.title
