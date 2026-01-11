@@ -268,15 +268,21 @@ async def ask_deal_type(message: Message, state: FSMContext):
 @router.callback_query(F.data.startswith("deal_"))
 async def process_deal_type(callback: CallbackQuery, state: FSMContext):
     logger.info(f"[DEAL] process_deal_type: {callback.data}")
-    
+
     deal_type = callback.data.replace("deal_", "")
+
+    # Валидация: проверяем что тип сделки существует
+    if deal_type not in DEAL_TYPES:
+        logger.warning(f"[DEAL] Неизвестный тип сделки: {deal_type}")
+        await callback.answer("❌ Неизвестный тип сделки", show_alert=True)
+        return
+
     await state.update_data(deal_type=deal_type)
-    
     await safe_clear_keyboard(callback)
-    
-    deal_type_name = DEAL_TYPES.get(deal_type, deal_type)
+
+    deal_type_name = DEAL_TYPES[deal_type]
     await callback.message.answer(f"✅ <b>Тип:</b> {deal_type_name}")
-    
+
     await ask_title(callback.message, state)
     await callback.answer()
 
@@ -534,10 +540,20 @@ async def process_price(message: Message, state: FSMContext):
 
     try:
         price = float(message.text.strip().replace(" ", "").replace(",", "."))
-        price_display = f"{int(price):,} ₽".replace(",", " ")
     except ValueError:
         await message.answer("❌ Введите число")
         return
+
+    # Валидация цены
+    if price < 0:
+        await message.answer("❌ Цена не может быть отрицательной")
+        return
+
+    if price > 100_000_000:  # 100 млн максимум
+        await message.answer("❌ Слишком большая цена (максимум 100 000 000 ₽)")
+        return
+
+    price_display = f"{int(price):,} ₽".replace(",", " ")
 
     # Сохраняем цену и показываем подтверждение
     await state.update_data(price=price_display)
