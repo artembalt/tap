@@ -5,17 +5,18 @@ from aiogram.utils.keyboard import ReplyKeyboardBuilder
 def get_main_reply_keyboard() -> ReplyKeyboardMarkup:
     """Основная reply клавиатура"""
     builder = ReplyKeyboardBuilder()
-    
+
     buttons = [
         "📝 Подать объявление",
         "🔍 Поиск",
-        "📋 Мои объявления", 
+        "📋 Мои объявления",
+        "⭐ Избранное",
         "👤 Профиль"
     ]
-    
+
     for button in buttons:
         builder.add(KeyboardButton(text=button))
-    
+
     builder.adjust(2)
     return builder.as_markup(resize_keyboard=True)
 
