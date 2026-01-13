@@ -710,18 +710,26 @@ async def callback_confirm_delete_ad(callback: CallbackQuery):
 
     # Удаляем объявление из каналов и меняем статус на DELETED
     try:
-        # Сначала удаляем из каналов
+        # Сначала удаляем из всех каналов
         deleted_from_channels = 0
         if ad.channel_message_ids:
-            for channel, msg_id in ad.channel_message_ids.items():
-                try:
-                    await callback.bot.delete_message(chat_id=channel, message_id=msg_id)
-                    deleted_from_channels += 1
-                    logger.info(f"[DELETE] Удалено из канала {channel}, msg_id={msg_id}")
-                except TelegramAPIError as e:
-                    logger.warning(f"[DELETE] Не удалось удалить из {channel}: {e}")
-                except Exception as e:
-                    logger.error(f"[DELETE] Ошибка удаления из {channel}: {e}")
+            for channel, msg_ids in ad.channel_message_ids.items():
+                # Поддержка старого формата (одно число) и нового (список)
+                if isinstance(msg_ids, int):
+                    msg_ids = [msg_ids]
+                elif not isinstance(msg_ids, list):
+                    msg_ids = [msg_ids]
+
+                # Удаляем все сообщения (для media_group их несколько)
+                for msg_id in msg_ids:
+                    try:
+                        await callback.bot.delete_message(chat_id=channel, message_id=msg_id)
+                        logger.info(f"[DELETE] Удалено из канала {channel}, msg_id={msg_id}")
+                    except TelegramAPIError as e:
+                        logger.warning(f"[DELETE] Не удалось удалить из {channel} msg_id={msg_id}: {e}")
+                    except Exception as e:
+                        logger.error(f"[DELETE] Ошибка удаления из {channel}: {e}")
+                deleted_from_channels += 1
 
         # Меняем статус на DELETED
         async with get_db_session() as session:

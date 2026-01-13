@@ -897,19 +897,25 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
                 if photos:
                     if len(photos) == 1:
                         msg = await bot.send_photo(chat_id=channel, photo=photos[0], caption=text)
+                        channel_ids[channel] = [msg.message_id]
+                        logger.info(f"[CHANNEL] опубликовано в {channel}, msg_id={msg.message_id}")
                     else:
                         media = [InputMediaPhoto(media=photos[0], caption=text)]
                         for p in photos[1:10]:
                             media.append(InputMediaPhoto(media=p))
                         msgs = await bot.send_media_group(chat_id=channel, media=media)
-                        msg = msgs[0] if msgs else None
+                        if msgs:
+                            # Сохраняем ВСЕ message_id из media_group
+                            msg_ids = [m.message_id for m in msgs]
+                            channel_ids[channel] = msg_ids
+                            logger.info(f"[CHANNEL] опубликовано в {channel}, msg_ids={msg_ids}")
                 elif video:
                     msg = await bot.send_video(chat_id=channel, video=video, caption=text)
+                    channel_ids[channel] = [msg.message_id]
+                    logger.info(f"[CHANNEL] опубликовано в {channel}, msg_id={msg.message_id}")
                 else:
                     msg = await bot.send_message(chat_id=channel, text=text, disable_web_page_preview=True)
-
-                if msg:
-                    channel_ids[channel] = msg.message_id
+                    channel_ids[channel] = [msg.message_id]
                     logger.info(f"[CHANNEL] опубликовано в {channel}, msg_id={msg.message_id}")
                 break  # Успех
 
