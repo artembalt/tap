@@ -932,3 +932,76 @@ async def cancel_creation(callback: CallbackQuery, state: FSMContext):
     await safe_clear_keyboard(callback)
     await callback.message.answer("❌ Отменено.")
     await callback.answer()
+
+
+# ========== FALLBACK-ОБРАБОТЧИКИ ==========
+# Обрабатывают текст в состояниях, где ожидается нажатие кнопки
+
+@router.message(AdCreation.region)
+async def fallback_region(message: Message, state: FSMContext):
+    """Пользователь ввёл текст вместо выбора региона"""
+    logger.info(f"[FALLBACK] region, text={message.text}, user={message.from_user.id}")
+    await message.answer("👆 Пожалуйста, выберите регион из списка выше")
+
+
+@router.message(AdCreation.city)
+async def fallback_city(message: Message, state: FSMContext):
+    """Пользователь ввёл текст вместо выбора города"""
+    logger.info(f"[FALLBACK] city, text={message.text}, user={message.from_user.id}")
+    await message.answer("👆 Пожалуйста, выберите город из списка выше")
+
+
+@router.message(AdCreation.category)
+async def fallback_category(message: Message, state: FSMContext):
+    """Пользователь ввёл текст вместо выбора категории"""
+    logger.info(f"[FALLBACK] category, text={message.text}, user={message.from_user.id}")
+    await message.answer("👆 Пожалуйста, выберите категорию из списка выше")
+
+
+@router.message(AdCreation.subcategory)
+async def fallback_subcategory(message: Message, state: FSMContext):
+    """Пользователь ввёл текст вместо выбора рубрики"""
+    logger.info(f"[FALLBACK] subcategory, text={message.text}, user={message.from_user.id}")
+    await message.answer("👆 Пожалуйста, выберите рубрику из списка выше")
+
+
+@router.message(AdCreation.deal_type)
+async def fallback_deal_type(message: Message, state: FSMContext):
+    """Пользователь ввёл текст вместо выбора типа сделки"""
+    logger.info(f"[FALLBACK] deal_type, text={message.text}, user={message.from_user.id}")
+    await message.answer("👆 Пожалуйста, выберите тип сделки из списка выше")
+
+
+@router.message(AdCreation.condition)
+async def fallback_condition(message: Message, state: FSMContext):
+    """Пользователь ввёл текст вместо выбора состояния"""
+    logger.info(f"[FALLBACK] condition, text={message.text}, user={message.from_user.id}")
+    await message.answer("👆 Пожалуйста, выберите состояние из списка выше")
+
+
+@router.message(AdCreation.delivery)
+async def fallback_delivery(message: Message, state: FSMContext):
+    """Пользователь ввёл текст вместо выбора доставки"""
+    logger.info(f"[FALLBACK] delivery, text={message.text}, user={message.from_user.id}")
+    await message.answer("👆 Пожалуйста, выберите способ доставки из списка выше")
+
+
+@router.message(AdCreation.confirm)
+async def fallback_confirm(message: Message, state: FSMContext):
+    """Пользователь ввёл текст вместо подтверждения"""
+    logger.info(f"[FALLBACK] confirm, text={message.text}, user={message.from_user.id}")
+    await message.answer("👆 Пожалуйста, нажмите кнопку для подтверждения или отмены")
+
+
+@router.message(AdCreation.photos, F.text)
+async def fallback_photos(message: Message, state: FSMContext):
+    """Пользователь ввёл текст вместо отправки фото"""
+    logger.info(f"[FALLBACK] photos, text={message.text}, user={message.from_user.id}")
+    await message.answer("📸 Отправьте фото или нажмите кнопку ниже")
+
+
+@router.message(AdCreation.video, F.text)
+async def fallback_video(message: Message, state: FSMContext):
+    """Пользователь ввёл текст вместо отправки видео"""
+    logger.info(f"[FALLBACK] video, text={message.text}, user={message.from_user.id}")
+    await message.answer("🎬 Отправьте видео или нажмите кнопку ниже")
