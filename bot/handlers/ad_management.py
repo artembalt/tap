@@ -11,6 +11,7 @@ from aiogram.exceptions import TelegramAPIError
 
 from bot.database.queries import AdQueries
 from bot.keyboards.inline import get_back_keyboard
+from bot.config import settings
 from shared.regions_config import REGIONS, CATEGORIES, CHANNELS_CONFIG
 
 router = Router(name='ad_management')
@@ -31,20 +32,30 @@ def get_my_ads_keyboard(offset: int, total: int) -> InlineKeyboardMarkup:
     """Клавиатура для пагинации объявлений"""
     buttons = []
 
-    # Кнопка "Показать следующие 50" если есть ещё объявления
-    if offset + ADS_PER_PAGE < total:
-        remaining = total - offset - ADS_PER_PAGE
-        next_count = min(remaining, ADS_PER_PAGE)
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"📄 Показать следующие {next_count}",
-                callback_data=f"my_ads_page_{offset + ADS_PER_PAGE}"
-            )
-        ])
+    # Навигация по страницам
+    nav_row = []
 
-    # Кнопка назад
+    # Кнопка "Назад" на предыдущую страницу
+    if offset > 0:
+        prev_offset = max(0, offset - ADS_PER_PAGE)
+        nav_row.append(InlineKeyboardButton(
+            text="◀️ Назад",
+            callback_data=f"my_ads_page_{prev_offset}"
+        ))
+
+    # Кнопка "Далее" если есть ещё объявления
+    if offset + ADS_PER_PAGE < total:
+        nav_row.append(InlineKeyboardButton(
+            text="Далее ▶️",
+            callback_data=f"my_ads_page_{offset + ADS_PER_PAGE}"
+        ))
+
+    if nav_row:
+        buttons.append(nav_row)
+
+    # Кнопка в главное меню
     buttons.append([
-        InlineKeyboardButton(text="◀️ Назад", callback_data="back_to_menu")
+        InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
