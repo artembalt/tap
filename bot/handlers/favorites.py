@@ -136,20 +136,34 @@ def format_favorites_text(favorites: list, offset: int, total: int) -> str:
         text = f"⭐ <b>Избранное</b> ({total})\n\n"
 
     # Список объявлений
-    for i, ad in enumerate(favorites, start_num):
+    for ad in favorites:
         # Ссылка на объявление в канале
         channel_link = get_ad_link(ad)
-        title_display = ad.title[:35] + "..." if len(ad.title) > 35 else ad.title
+        title_display = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
+
+        # Форматируем цену
+        if ad.price:
+            price_text = f"{int(ad.price):,}".replace(",", " ") + f" {ad.currency or 'RUB'}"
+        else:
+            price_text = "Не указана"
 
         # Ссылка для удаления (deep link)
         delete_link = f"https://t.me/{bot_username}?start=fdel_{ad.id}"
 
+        # Заголовок со звездой
         if channel_link:
-            text += f"{i}. <a href=\"{channel_link}\">{title_display}</a>  <a href=\"{delete_link}\">❌ Удалить</a>\n"
+            text += f"⭐ <a href=\"{channel_link}\">{title_display}</a>\n"
         else:
-            text += f"{i}. {title_display}  <a href=\"{delete_link}\">❌ Удалить</a>\n"
+            text += f"⭐ {title_display}\n"
 
-    text += "\n👆 Нажмите на заголовок — открыть объявление"
+        # Цена
+        text += f"💰 {price_text}\n"
+
+        # Удалить
+        text += f"<a href=\"{delete_link}\">❌ Удалить</a>\n"
+
+        # Пустая строка
+        text += "\n"
 
     return text
 
