@@ -141,11 +141,49 @@ async def _send_welcome(message: Message):
         logger.error(f"[START] Сетевая ошибка: {e}")
 
 
-async def show_seller_profile(message: Message, seller_id: int):
-    """Показать профиль продавца с просмотрами и кликабельными объявлениями"""
-    from shared.regions_config import CHANNELS_CONFIG
+# Количество объявлений на странице в профиле
+PROFILE_ADS_PER_PAGE = 50
 
-    logger.info(f"Показ профиля продавца: {seller_id}")
+
+def get_seller_profile_keyboard(seller_id: int, offset: int, total: int) -> InlineKeyboardMarkup:
+    """Клавиатура для профиля продавца с пагинацией"""
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    buttons = []
+    nav_row = []
+
+    # Кнопка "Назад" если не первая страница
+    if offset > 0:
+        prev_offset = max(0, offset - PROFILE_ADS_PER_PAGE)
+        nav_row.append(InlineKeyboardButton(
+            text="◀️ Назад",
+            callback_data=f"seller_page_{seller_id}_{prev_offset}"
+        ))
+
+    # Кнопка "Далее" если есть ещё
+    if offset + PROFILE_ADS_PER_PAGE < total:
+        nav_row.append(InlineKeyboardButton(
+            text="Далее ▶️",
+            callback_data=f"seller_page_{seller_id}_{offset + PROFILE_ADS_PER_PAGE}"
+        ))
+
+    if nav_row:
+        buttons.append(nav_row)
+
+    # Кнопка в главное меню
+    buttons.append([
+        InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")
+    ])
+
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def show_seller_profile(message: Message, seller_id: int, offset: int = 0, edit: bool = False):
+    """Показать профиль продавца с пагинацией по 50 объявлений"""
+    from shared.regions_config import CHANNELS_CONFIG
+    from aiogram.exceptions import TelegramAPIError
+
+    logger.info(f"Показ профиля продавца: {seller_id}, offset={offset}")
 
     try:
         async with get_db_session() as session:
@@ -156,21 +194,37 @@ async def show_seller_profile(message: Message, seller_id: int):
             seller = result.scalar_one_or_none()
 
             if not seller:
-                await message.answer("❌ Продавец не найден")
+                text = "❌ Продавец не найден"
+                if edit:
+                    await message.edit_text(text)
+                else:
+                    await message.answer(text)
                 return
 
-            # Инкрементируем просмотры профиля
-            seller.profile_views = (seller.profile_views or 0) + 1
-            await session.commit()
+            # Инкрементируем просмотры профиля только при первом просмотре (offset=0)
+            if offset == 0:
+                seller.profile_views = (seller.profile_views or 0) + 1
+                await session.commit()
 
-            # Получаем активные объявления
+            # Получаем общее количество активных объявлений
+            total_count_result = await session.execute(
+                select(func.count(Ad.id)).where(
+                    Ad.user_id == seller_id,
+                    Ad.status == AdStatus.ACTIVE.value
+                )
+            )
+            total_active = total_count_result.scalar() or 0
+
+            # Получаем активные объявления с пагинацией
             active_ads_result = await session.execute(
                 select(Ad).where(
                     Ad.user_id == seller_id,
                     Ad.status == AdStatus.ACTIVE.value
                 ).order_by(Ad.created_at.desc())
+                .limit(PROFILE_ADS_PER_PAGE)
+                .offset(offset)
             )
-            active_ads = active_ads_result.scalars().all()
+            active_ads = list(active_ads_result.scalars().all())
 
             # Получаем количество завершённых (архив + удалённые)
             completed_count_result = await session.execute(
@@ -195,10 +249,18 @@ async def show_seller_profile(message: Message, seller_id: int):
             # Дата регистрации
             reg_date = seller.created_at.strftime("%d.%m.%Y") if seller.created_at else "неизвестно"
 
+            # Заголовок списка объявлений с пагинацией
+            if total_active > PROFILE_ADS_PER_PAGE:
+                start_num = offset + 1
+                end_num = offset + len(active_ads)
+                ads_header = f"📋 <b>Активные объявления</b> ({start_num}-{end_num} из {total_active}):"
+            else:
+                ads_header = f"📋 <b>Активные объявления</b> ({total_active}):"
+
             # Формируем список объявлений с ссылками на каналы категорий
             ads_list = ""
             if active_ads:
-                for i, ad in enumerate(active_ads, 1):
+                for i, ad in enumerate(active_ads, offset + 1):
                     title = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
 
                     # Пытаемся получить ссылку на объявление в канале категории
@@ -237,23 +299,61 @@ async def show_seller_profile(message: Message, seller_id: int):
 
 📊 <b>Статистика:</b>
 • Просмотров профиля: {seller.profile_views or 0}
-• Активных объявлений: {len(active_ads)}
+• Активных объявлений: {total_active}
 • Завершённых: {completed_count}
 
-📋 <b>Активные объявления:</b>
-{ads_list}"""
+{ads_header}
+{ads_list}
+👆 Нажмите на заголовок — открыть объявление"""
 
-            # Отправляем профиль (RetryMiddleware автоматически повторит при ошибках)
-            await message.answer(
-                profile_text,
-                reply_markup=get_back_keyboard(),
-                disable_web_page_preview=True
-            )
+            keyboard = get_seller_profile_keyboard(seller_id, offset, total_active)
+
+            # Отправляем профиль
+            if edit:
+                try:
+                    await message.edit_text(
+                        profile_text,
+                        reply_markup=keyboard,
+                        disable_web_page_preview=True
+                    )
+                except TelegramAPIError:
+                    await message.answer(
+                        profile_text,
+                        reply_markup=keyboard,
+                        disable_web_page_preview=True
+                    )
+            else:
+                await message.answer(
+                    profile_text,
+                    reply_markup=keyboard,
+                    disable_web_page_preview=True
+                )
             logger.info(f"Профиль {seller_id} показан успешно")
 
     except Exception as e:
         logger.error(f"Ошибка при показе профиля: {e}", exc_info=True)
-        await message.answer("❌ Ошибка при загрузке профиля. Попробуйте ещё раз.")
+        text = "❌ Ошибка при загрузке профиля. Попробуйте ещё раз."
+        if edit:
+            try:
+                await message.edit_text(text)
+            except:
+                await message.answer(text)
+        else:
+            await message.answer(text)
+
+
+@router.callback_query(F.data.startswith("seller_page_"))
+async def seller_profile_page(callback: CallbackQuery):
+    """Навигация по страницам профиля продавца"""
+    # Формат: seller_page_{seller_id}_{offset}
+    parts = callback.data.replace("seller_page_", "").split("_")
+    seller_id = int(parts[0])
+    offset = int(parts[1])
+
+    logger.info(f"Профиль продавца: страница, seller={seller_id}, offset={offset}")
+
+    await show_seller_profile(callback.message, seller_id, offset=offset, edit=True)
+    await callback.answer()
 
 
 @router.message(Command("help"))
