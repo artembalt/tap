@@ -8,7 +8,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.fsm.context import FSMContext
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramNetworkError, TelegramAPIError
 from sqlalchemy import select, func
 
 from bot.keyboards.inline import get_main_menu_keyboard, get_back_keyboard
@@ -708,15 +708,32 @@ async def callback_confirm_delete_ad(callback: CallbackQuery):
         await callback.answer("❌ Объявление не найдено или не ваше", show_alert=True)
         return
 
-    # Удаляем объявление (меняем статус на DELETED)
+    # Удаляем объявление из каналов и меняем статус на DELETED
     try:
+        # Сначала удаляем из каналов
+        deleted_from_channels = 0
+        if ad.channel_message_ids:
+            for channel, msg_id in ad.channel_message_ids.items():
+                try:
+                    await callback.bot.delete_message(chat_id=channel, message_id=msg_id)
+                    deleted_from_channels += 1
+                    logger.info(f"[DELETE] Удалено из канала {channel}, msg_id={msg_id}")
+                except TelegramAPIError as e:
+                    logger.warning(f"[DELETE] Не удалось удалить из {channel}: {e}")
+                except Exception as e:
+                    logger.error(f"[DELETE] Ошибка удаления из {channel}: {e}")
+
+        # Меняем статус на DELETED
         async with get_db_session() as session:
             from sqlalchemy import update
             stmt = update(Ad).where(Ad.id == ad.id).values(status=AdStatus.DELETED.value)
             await session.execute(stmt)
             await session.commit()
 
-        await callback.answer("✅ Объявление удалено", show_alert=False)
+        if deleted_from_channels > 0:
+            await callback.answer(f"✅ Удалено из {deleted_from_channels} канал(ов)", show_alert=False)
+        else:
+            await callback.answer("✅ Объявление удалено", show_alert=False)
 
         # Возвращаемся к списку объявлений
         from bot.handlers.ad_management import show_user_ads
