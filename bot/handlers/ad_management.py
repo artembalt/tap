@@ -577,3 +577,418 @@ async def process_new_price(message: Message, state: FSMContext):
             logger.error(f"Ошибка обновления цены: {e}")
             await state.clear()
             await message.answer("❌ Ошибка сохранения. Попробуйте позже.", reply_markup=get_back_keyboard())
+
+
+# =============================================================================
+# РЕДАКТИРОВАНИЕ ФОТО
+# =============================================================================
+
+@router.callback_query(F.data.startswith("edit_photos_"))
+async def start_edit_photos(callback: CallbackQuery, state: FSMContext):
+    """Начать редактирование фото"""
+    ad_id = callback.data.replace("edit_photos_", "")
+
+    # Получаем текущее объявление
+    ad = await AdQueries.get_ad(ad_id)
+    if not ad:
+        await callback.answer("❌ Объявление не найдено", show_alert=True)
+        return
+
+    # Если есть видео, нельзя добавить фото
+    if ad.video:
+        await callback.answer("❌ У объявления есть видео. Сначала удалите видео.", show_alert=True)
+        return
+
+    await state.update_data(edit_ad_id=ad_id, new_photos=[])
+    await state.set_state(EditAdStates.waiting_for_new_photos)
+
+    current_count = len(ad.photos) if ad.photos else 0
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить все фото", callback_data=f"delete_all_photos_{ad_id}")] if current_count > 0 else [],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads")]
+    ])
+    # Убираем пустые строки
+    keyboard.inline_keyboard = [row for row in keyboard.inline_keyboard if row]
+
+    await callback.message.edit_text(
+        f"🖼 <b>Изменение фото</b>\n\n"
+        f"Текущее количество фото: {current_count}\n\n"
+        f"Отправьте новые фото (до 10 штук).\n"
+        f"Можно отправить несколько фото сразу или по одному.\n\n"
+        f"Когда закончите, нажмите кнопку «✅ Готово»",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delete_all_photos_"))
+async def delete_all_photos(callback: CallbackQuery, state: FSMContext):
+    """Удалить все фото объявления"""
+    ad_id = callback.data.replace("delete_all_photos_", "")
+
+    try:
+        async with get_db_session() as session:
+            from sqlalchemy import update
+            import uuid
+
+            stmt = update(Ad).where(Ad.id == uuid.UUID(ad_id)).values(photos=[])
+            await session.execute(stmt)
+            await session.commit()
+
+        await state.clear()
+
+        # Обновляем в каналах
+        updated, errors = await update_ad_in_channels_with_media(ad_id, callback.bot)
+
+        result_text = "✅ Все фото удалены!"
+        if updated > 0:
+            result_text += f"\n\n📢 Обновлено в {updated} канал(ах)"
+        if errors > 0:
+            result_text += f"\n⚠️ Ошибок: {errors}"
+
+        await callback.message.edit_text(result_text, reply_markup=get_back_keyboard())
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Ошибка удаления фото: {e}")
+        await callback.answer("❌ Ошибка удаления", show_alert=True)
+
+
+@router.message(EditAdStates.waiting_for_new_photos, F.photo)
+async def process_new_photo(message: Message, state: FSMContext):
+    """Обработка новых фото"""
+    data = await state.get_data()
+    new_photos = data.get("new_photos", [])
+
+    # Добавляем фото (берём самое большое разрешение)
+    photo_id = message.photo[-1].file_id
+    if photo_id not in new_photos:
+        new_photos.append(photo_id)
+
+    await state.update_data(new_photos=new_photos)
+
+    # Показываем кнопку "Готово" после первого фото
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"✅ Готово ({len(new_photos)} фото)", callback_data="save_new_photos")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads")]
+    ])
+
+    if len(new_photos) >= 10:
+        # Максимум 10 фото
+        await message.answer(
+            f"📸 Получено {len(new_photos)} фото (максимум).\n"
+            f"Нажмите «✅ Готово» для сохранения.",
+            reply_markup=keyboard
+        )
+    elif len(new_photos) == 1:
+        await message.answer(
+            f"📸 Получено {len(new_photos)} фото.\n"
+            f"Отправьте ещё или нажмите «✅ Готово».",
+            reply_markup=keyboard
+        )
+    # Для 2+ фото не спамим сообщениями
+
+
+@router.callback_query(F.data == "save_new_photos")
+async def save_new_photos(callback: CallbackQuery, state: FSMContext):
+    """Сохранить новые фото"""
+    data = await state.get_data()
+    ad_id = data.get("edit_ad_id")
+    new_photos = data.get("new_photos", [])
+
+    if not ad_id:
+        await state.clear()
+        await callback.answer("❌ Ошибка", show_alert=True)
+        return
+
+    if not new_photos:
+        await callback.answer("❌ Вы не отправили ни одного фото", show_alert=True)
+        return
+
+    try:
+        async with get_db_session() as session:
+            from sqlalchemy import update
+            import uuid
+
+            stmt = update(Ad).where(Ad.id == uuid.UUID(ad_id)).values(photos=new_photos[:10])
+            await session.execute(stmt)
+            await session.commit()
+
+        await state.clear()
+
+        # Обновляем в каналах
+        updated, errors = await update_ad_in_channels_with_media(ad_id, callback.bot)
+
+        result_text = f"✅ Фото обновлены!\n\nСохранено фото: {len(new_photos[:10])}"
+        if updated > 0:
+            result_text += f"\n\n📢 Обновлено в {updated} канал(ах)"
+        if errors > 0:
+            result_text += f"\n⚠️ Ошибок: {errors}"
+
+        await callback.message.edit_text(result_text, reply_markup=get_back_keyboard())
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Ошибка сохранения фото: {e}")
+        await state.clear()
+        await callback.answer("❌ Ошибка сохранения", show_alert=True)
+
+
+# =============================================================================
+# РЕДАКТИРОВАНИЕ ВИДЕО
+# =============================================================================
+
+@router.callback_query(F.data.startswith("edit_video_"))
+async def start_edit_video(callback: CallbackQuery, state: FSMContext):
+    """Начать редактирование видео"""
+    ad_id = callback.data.replace("edit_video_", "")
+
+    # Получаем текущее объявление
+    ad = await AdQueries.get_ad(ad_id)
+    if not ad:
+        await callback.answer("❌ Объявление не найдено", show_alert=True)
+        return
+
+    # Если есть фото, нельзя добавить видео
+    if ad.photos:
+        await callback.answer("❌ У объявления есть фото. Сначала удалите фото.", show_alert=True)
+        return
+
+    await state.update_data(edit_ad_id=ad_id)
+    await state.set_state(EditAdStates.waiting_for_new_video)
+
+    has_video = bool(ad.video)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить видео", callback_data=f"delete_video_{ad_id}")] if has_video else [],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads")]
+    ])
+    keyboard.inline_keyboard = [row for row in keyboard.inline_keyboard if row]
+
+    await callback.message.edit_text(
+        f"🎬 <b>Изменение видео</b>\n\n"
+        f"{'Видео: есть' if has_video else 'Видео: нет'}\n\n"
+        f"Отправьте новое видео (до 50 МБ).",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("delete_video_"))
+async def delete_video(callback: CallbackQuery, state: FSMContext):
+    """Удалить видео объявления"""
+    ad_id = callback.data.replace("delete_video_", "")
+
+    try:
+        async with get_db_session() as session:
+            from sqlalchemy import update
+            import uuid
+
+            stmt = update(Ad).where(Ad.id == uuid.UUID(ad_id)).values(video=None)
+            await session.execute(stmt)
+            await session.commit()
+
+        await state.clear()
+
+        # Обновляем в каналах
+        updated, errors = await update_ad_in_channels_with_media(ad_id, callback.bot)
+
+        result_text = "✅ Видео удалено!"
+        if updated > 0:
+            result_text += f"\n\n📢 Обновлено в {updated} канал(ах)"
+        if errors > 0:
+            result_text += f"\n⚠️ Ошибок: {errors}"
+
+        await callback.message.edit_text(result_text, reply_markup=get_back_keyboard())
+        await callback.answer()
+
+    except Exception as e:
+        logger.error(f"Ошибка удаления видео: {e}")
+        await callback.answer("❌ Ошибка удаления", show_alert=True)
+
+
+@router.message(EditAdStates.waiting_for_new_video, F.video)
+async def process_new_video(message: Message, state: FSMContext):
+    """Обработка нового видео"""
+    data = await state.get_data()
+    ad_id = data.get("edit_ad_id")
+
+    if not ad_id:
+        await state.clear()
+        await message.answer("❌ Ошибка. Попробуйте заново.", reply_markup=get_back_keyboard())
+        return
+
+    video_id = message.video.file_id
+
+    try:
+        async with get_db_session() as session:
+            from sqlalchemy import update
+            import uuid
+
+            stmt = update(Ad).where(Ad.id == uuid.UUID(ad_id)).values(video=video_id)
+            await session.execute(stmt)
+            await session.commit()
+
+        await state.clear()
+
+        # Обновляем в каналах
+        updated, errors = await update_ad_in_channels_with_media(ad_id, message.bot)
+
+        result_text = "✅ Видео обновлено!"
+        if updated > 0:
+            result_text += f"\n\n📢 Обновлено в {updated} канал(ах)"
+        if errors > 0:
+            result_text += f"\n⚠️ Ошибок: {errors}"
+
+        await message.answer(result_text, reply_markup=get_back_keyboard())
+
+    except Exception as e:
+        logger.error(f"Ошибка сохранения видео: {e}")
+        await state.clear()
+        await message.answer("❌ Ошибка сохранения. Попробуйте позже.", reply_markup=get_back_keyboard())
+
+
+# =============================================================================
+# ОБНОВЛЕНИЕ МЕДИА В КАНАЛАХ
+# =============================================================================
+
+async def update_ad_in_channels_with_media(ad_id: str, bot: Bot) -> tuple[int, int]:
+    """
+    Обновить объявление с медиа во всех каналах.
+    Удаляет старое сообщение и отправляет новое.
+
+    Returns:
+        (updated_count, error_count)
+    """
+    from aiogram.types import InputMediaPhoto, InputMediaVideo
+    import uuid
+    import asyncio
+
+    try:
+        async with get_db_session() as session:
+            from sqlalchemy import select
+
+            result = await session.execute(
+                select(Ad).where(Ad.id == uuid.UUID(ad_id))
+            )
+            ad = result.scalar_one_or_none()
+
+            if not ad or not ad.channel_message_ids:
+                return 0, 0
+
+            # Получаем username бота
+            bot_info = await bot.get_me()
+            bot_username = bot_info.username
+
+            # Формируем хэштеги
+            hashtags = []
+            if ad.subcategory:
+                hashtags.append(get_subcategory_hashtag(ad.subcategory))
+            if ad.category and ad.region:
+                category_name = CATEGORIES.get(ad.category, ad.category)
+                region_name = REGIONS.get(ad.region, ad.region)
+                cat_clean = category_name.split()[-1] if ' ' in category_name else category_name
+                reg_clean = region_name.replace(' ', '_').replace('-', '_')
+                hashtags.append(f"#{cat_clean}_{reg_clean}")
+            if ad.city:
+                hashtags.append(get_city_hashtag(ad.city))
+
+            hashtags_text = " ".join(hashtags) if hashtags else ""
+
+            # Формируем цену
+            if ad.price:
+                price_text = f"{int(ad.price):,}".replace(",", " ") + f" {ad.currency or 'RUB'}"
+            else:
+                pf = ad.premium_features or {}
+                price_text = pf.get('price_text', 'Не указана')
+
+            # Формируем текст объявления
+            text = f"""<b>{ad.title}</b>
+
+{ad.description}
+
+💰 {price_text}
+
+{hashtags_text}
+
+━━━━━━━━━━━━━━━
+😎 <a href="tg://user?id={ad.user_id}">Написать продавцу</a>
+👾 <a href="https://t.me/{bot_username}?start=profile_{ad.user_id}">Профиль продавца</a>
+⭐ <a href="https://t.me/{bot_username}?start=fav_{ad.id}">В избранное</a>
+📢 <a href="https://t.me/{bot_username}">Разместить объявление</a>"""
+
+            updated = 0
+            errors = 0
+            new_channel_ids = {}
+
+            # Обновляем в каждом канале
+            for channel, old_msg_id in ad.channel_message_ids.items():
+                try:
+                    # Удаляем старое сообщение
+                    try:
+                        await bot.delete_message(chat_id=channel, message_id=old_msg_id)
+                    except TelegramAPIError:
+                        pass  # Сообщение могло быть уже удалено
+
+                    await asyncio.sleep(0.5)  # Небольшая задержка
+
+                    # Отправляем новое сообщение
+                    msg = None
+                    if ad.photos:
+                        if len(ad.photos) == 1:
+                            msg = await bot.send_photo(
+                                chat_id=channel,
+                                photo=ad.photos[0],
+                                caption=text,
+                                parse_mode="HTML"
+                            )
+                        else:
+                            media = [InputMediaPhoto(media=ad.photos[0], caption=text, parse_mode="HTML")]
+                            for p in ad.photos[1:10]:
+                                media.append(InputMediaPhoto(media=p))
+                            msgs = await bot.send_media_group(chat_id=channel, media=media)
+                            msg = msgs[0] if msgs else None
+                    elif ad.video:
+                        msg = await bot.send_video(
+                            chat_id=channel,
+                            video=ad.video,
+                            caption=text,
+                            parse_mode="HTML"
+                        )
+                    else:
+                        msg = await bot.send_message(
+                            chat_id=channel,
+                            text=text,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True
+                        )
+
+                    if msg:
+                        new_channel_ids[channel] = msg.message_id
+                        updated += 1
+                        logger.info(f"[MEDIA_EDIT] Обновлено в канале {channel}, new_msg_id={msg.message_id}")
+
+                    await asyncio.sleep(1)  # Задержка между каналами
+
+                except TelegramAPIError as e:
+                    logger.error(f"[MEDIA_EDIT] Ошибка в {channel}: {e}")
+                    errors += 1
+                except Exception as e:
+                    logger.error(f"[MEDIA_EDIT] Неожиданная ошибка в {channel}: {e}")
+                    errors += 1
+
+            # Обновляем channel_message_ids в БД
+            if new_channel_ids:
+                from sqlalchemy import update as sql_update
+                stmt = sql_update(Ad).where(Ad.id == uuid.UUID(ad_id)).values(
+                    channel_message_ids=new_channel_ids
+                )
+                await session.execute(stmt)
+                await session.commit()
+
+            return updated, errors
+
+    except Exception as e:
+        logger.error(f"[MEDIA_EDIT] Общая ошибка: {e}")
+        return 0, 1

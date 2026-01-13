@@ -750,10 +750,22 @@ async def show_edit_menu(message: Message, ad_id: str):
     else:
         price_text = "Договорная"
 
+    # Определяем текст кнопки для фото/видео
+    has_photos = bool(ad.photos)
+    has_video = bool(ad.video)
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Изменить заголовок", callback_data=f"edit_title_{ad_id}")],
         [InlineKeyboardButton(text="📝 Изменить описание", callback_data=f"edit_desc_{ad_id}")],
         [InlineKeyboardButton(text="💰 Изменить цену", callback_data=f"edit_price_{ad_id}")],
+        [InlineKeyboardButton(
+            text=f"🖼 Изменить фото ({len(ad.photos) if ad.photos else 0})" if not has_video else "🖼 Добавить фото",
+            callback_data=f"edit_photos_{ad_id}"
+        )],
+        [InlineKeyboardButton(
+            text="🎬 Изменить видео" if has_video else "🎬 Добавить видео",
+            callback_data=f"edit_video_{ad_id}"
+        )],
         [InlineKeyboardButton(text="◀️ Назад к объявлениям", callback_data="my_ads")]
     ])
 
