@@ -5,7 +5,7 @@ import logging
 import time
 import asyncio
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.exceptions import TelegramNetworkError
@@ -147,8 +147,6 @@ PROFILE_ADS_PER_PAGE = 50
 
 def get_seller_profile_keyboard(seller_id: int, offset: int, total: int) -> InlineKeyboardMarkup:
     """Клавиатура для профиля продавца с пагинацией"""
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
     buttons = []
     nav_row = []
 
