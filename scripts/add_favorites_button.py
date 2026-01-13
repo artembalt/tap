@@ -138,7 +138,8 @@ async def update_channel_messages(seller_id: int, dry_run: bool = False):
                             await bot.edit_message_caption(
                                 chat_id=channel,
                                 message_id=msg_id,
-                                caption=new_text
+                                caption=new_text,
+                                parse_mode="HTML"
                             )
                             logger.info(f"    ✅ Обновлен caption в {channel}")
                         else:
@@ -147,6 +148,7 @@ async def update_channel_messages(seller_id: int, dry_run: bool = False):
                                 chat_id=channel,
                                 message_id=msg_id,
                                 text=new_text,
+                                parse_mode="HTML",
                                 disable_web_page_preview=True
                             )
                             logger.info(f"    ✅ Обновлен текст в {channel}")
@@ -178,12 +180,14 @@ async def update_channel_messages(seller_id: int, dry_run: bool = False):
                             try:
                                 if ad.photos or ad.video:
                                     await bot.edit_message_caption(
-                                        chat_id=channel, message_id=msg_id, caption=new_text
+                                        chat_id=channel, message_id=msg_id,
+                                        caption=new_text, parse_mode="HTML"
                                     )
                                 else:
                                     await bot.edit_message_text(
                                         chat_id=channel, message_id=msg_id,
-                                        text=new_text, disable_web_page_preview=True
+                                        text=new_text, parse_mode="HTML",
+                                        disable_web_page_preview=True
                                     )
                                 logger.info(f"    ✅ Обновлен после ожидания в {channel}")
                                 updated += 1
