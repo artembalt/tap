@@ -432,11 +432,18 @@ async def process_new_title(message: Message, state: FSMContext):
             await session.execute(stmt)
             await session.commit()
 
+        # Обновляем в каналах
+        updated, errors = await update_ad_in_channels(ad_id, message.bot)
+
         await state.clear()
-        await message.answer(
-            f"✅ Заголовок обновлён!\n\nНовый заголовок: «{new_title}»",
-            reply_markup=get_back_keyboard()
-        )
+
+        result_text = f"✅ Заголовок обновлён!\n\nНовый заголовок: «{new_title}»"
+        if updated > 0:
+            result_text += f"\n\n📢 Обновлено в {updated} канал(ах)"
+        if errors > 0:
+            result_text += f"\n⚠️ Ошибок: {errors}"
+
+        await message.answer(result_text, reply_markup=get_back_keyboard())
 
     except Exception as e:
         logger.error(f"Ошибка обновления заголовка: {e}")
@@ -470,11 +477,18 @@ async def process_new_description(message: Message, state: FSMContext):
             await session.execute(stmt)
             await session.commit()
 
+        # Обновляем в каналах
+        updated, errors = await update_ad_in_channels(ad_id, message.bot)
+
         await state.clear()
-        await message.answer(
-            f"✅ Описание обновлено!",
-            reply_markup=get_back_keyboard()
-        )
+
+        result_text = "✅ Описание обновлено!"
+        if updated > 0:
+            result_text += f"\n\n📢 Обновлено в {updated} канал(ах)"
+        if errors > 0:
+            result_text += f"\n⚠️ Ошибок: {errors}"
+
+        await message.answer(result_text, reply_markup=get_back_keyboard())
 
     except Exception as e:
         logger.error(f"Ошибка обновления описания: {e}")
@@ -509,12 +523,19 @@ async def process_new_price(message: Message, state: FSMContext):
             await session.execute(stmt)
             await session.commit()
 
+        # Обновляем в каналах
+        updated, errors = await update_ad_in_channels(ad_id, message.bot)
+
         await state.clear()
         price_display = f"{int(new_price):,}".replace(",", " ") + " ₽"
-        await message.answer(
-            f"✅ Цена обновлена!\n\nНовая цена: {price_display}",
-            reply_markup=get_back_keyboard()
-        )
+
+        result_text = f"✅ Цена обновлена!\n\nНовая цена: {price_display}"
+        if updated > 0:
+            result_text += f"\n\n📢 Обновлено в {updated} канал(ах)"
+        if errors > 0:
+            result_text += f"\n⚠️ Ошибок: {errors}"
+
+        await message.answer(result_text, reply_markup=get_back_keyboard())
 
     except ValueError:
         # Если это не число - сохраняем как текст в premium_features
@@ -537,11 +558,18 @@ async def process_new_price(message: Message, state: FSMContext):
                 await session.execute(stmt)
                 await session.commit()
 
+            # Обновляем в каналах
+            updated, errors = await update_ad_in_channels(ad_id, message.bot)
+
             await state.clear()
-            await message.answer(
-                f"✅ Цена обновлена!\n\nНовая цена: {price_text}",
-                reply_markup=get_back_keyboard()
-            )
+
+            result_text = f"✅ Цена обновлена!\n\nНовая цена: {price_text}"
+            if updated > 0:
+                result_text += f"\n\n📢 Обновлено в {updated} канал(ах)"
+            if errors > 0:
+                result_text += f"\n⚠️ Ошибок: {errors}"
+
+            await message.answer(result_text, reply_markup=get_back_keyboard())
 
         except Exception as e:
             logger.error(f"Ошибка обновления цены: {e}")
