@@ -9,6 +9,7 @@ from aiogram.exceptions import TelegramAPIError
 from bot.database.queries import FavoritesQueries, AdQueries
 from bot.database.connection import get_db_session
 from bot.database.models import Ad, AdStatus
+from bot.config import settings
 from sqlalchemy import select
 from shared.regions_config import CHANNELS_CONFIG
 
@@ -19,23 +20,9 @@ router = Router(name='favorites')
 FAVORITES_PER_PAGE = 50
 
 
-def get_favorites_keyboard(favorites: list, offset: int, total: int) -> InlineKeyboardMarkup:
-    """Клавиатура с кнопками удаления и пагинацией"""
+def get_favorites_keyboard(offset: int, total: int) -> InlineKeyboardMarkup:
+    """Клавиатура только с пагинацией"""
     buttons = []
-
-    # Кнопки удаления (по 10 в ряд)
-    row = []
-    for i, ad in enumerate(favorites):
-        num = offset + i + 1
-        row.append(InlineKeyboardButton(
-            text=f"❌{num}",
-            callback_data=f"fav_del_{ad.id}"
-        ))
-        if len(row) == 10:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
 
     # Навигация (пагинация)
     nav_row = []
@@ -137,6 +124,8 @@ async def get_user_favorites_with_count(user_id: int, limit: int = 50, offset: i
 
 def format_favorites_text(favorites: list, offset: int, total: int) -> str:
     """Формирует текстовое сообщение со списком избранного"""
+    bot_username = settings.BOT_USERNAME
+
     # Заголовок с пагинацией
     start_num = offset + 1
     end_num = offset + len(favorites)
@@ -148,17 +137,19 @@ def format_favorites_text(favorites: list, offset: int, total: int) -> str:
 
     # Список объявлений
     for i, ad in enumerate(favorites, start_num):
-        # Получаем ссылку на объявление
+        # Ссылка на объявление в канале
         channel_link = get_ad_link(ad)
-        title_display = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
+        title_display = ad.title[:35] + "..." if len(ad.title) > 35 else ad.title
+
+        # Ссылка для удаления (deep link)
+        delete_link = f"https://t.me/{bot_username}?start=fdel_{ad.id}"
 
         if channel_link:
-            text += f"{i}. <a href=\"{channel_link}\">{title_display}</a>  ❌\n"
+            text += f"{i}. <a href=\"{channel_link}\">{title_display}</a>  <a href=\"{delete_link}\">❌ Удалить</a>\n"
         else:
-            text += f"{i}. {title_display}  ❌\n"
+            text += f"{i}. {title_display}  <a href=\"{delete_link}\">❌ Удалить</a>\n"
 
     text += "\n👆 Нажмите на заголовок — открыть объявление"
-    text += "\n🗑 Нажмите ❌N — удалить объявление N из избранного"
 
     return text
 
@@ -180,7 +171,7 @@ async def show_favorites(message: Message):
         return
 
     text = format_favorites_text(favorites, offset=0, total=total)
-    keyboard = get_favorites_keyboard(favorites, offset=0, total=total)
+    keyboard = get_favorites_keyboard(offset=0, total=total)
     await message.answer(text, reply_markup=keyboard, disable_web_page_preview=True)
 
 
@@ -199,7 +190,7 @@ async def favorites_page(callback: CallbackQuery):
         return
 
     text = format_favorites_text(favorites, offset=offset, total=total)
-    keyboard = get_favorites_keyboard(favorites, offset=offset, total=total)
+    keyboard = get_favorites_keyboard(offset=offset, total=total)
 
     try:
         await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
@@ -246,42 +237,6 @@ async def view_favorite_ad(callback: CallbackQuery):
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("fav_del_"))
-async def quick_remove_from_favorites(callback: CallbackQuery):
-    """Быстрое удаление из избранного (кнопка ❌N в списке)"""
-    ad_id = callback.data.replace("fav_del_", "")
-    user_id = callback.from_user.id
-
-    logger.info(f"[FAVORITES] quick_remove, user={user_id}, ad_id={ad_id}")
-
-    success = await FavoritesQueries.remove_from_favorites(user_id, ad_id)
-
-    if success:
-        await callback.answer("✅ Удалено из избранного", show_alert=False)
-
-        # Обновляем список (остаёмся на первой странице)
-        favorites, total = await get_user_favorites_with_count(user_id, limit=FAVORITES_PER_PAGE, offset=0)
-
-        if not favorites:
-            try:
-                await callback.message.edit_text(
-                    "⭐ <b>Избранное пусто</b>\n\n"
-                    "Добавляйте объявления в избранное, нажимая кнопку "
-                    "«⭐ В избранное» под объявлениями в каналах."
-                )
-            except TelegramAPIError:
-                pass
-        else:
-            text = format_favorites_text(favorites, offset=0, total=total)
-            keyboard = get_favorites_keyboard(favorites, offset=0, total=total)
-            try:
-                await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
-            except TelegramAPIError:
-                pass
-    else:
-        await callback.answer("❌ Ошибка удаления", show_alert=True)
-
-
 @router.callback_query(F.data.startswith("fav_remove_"))
 async def remove_from_favorites(callback: CallbackQuery):
     """Удалить из избранного (из просмотра объявления)"""
@@ -305,7 +260,7 @@ async def remove_from_favorites(callback: CallbackQuery):
             )
         else:
             text = format_favorites_text(favorites, offset=0, total=total)
-            keyboard = get_favorites_keyboard(favorites, offset=0, total=total)
+            keyboard = get_favorites_keyboard(offset=0, total=total)
             await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
     else:
         await callback.answer("❌ Ошибка удаления", show_alert=True)
@@ -326,7 +281,7 @@ async def favorites_back(callback: CallbackQuery):
         )
     else:
         text = format_favorites_text(favorites, offset=0, total=total)
-        keyboard = get_favorites_keyboard(favorites, offset=0, total=total)
+        keyboard = get_favorites_keyboard(offset=0, total=total)
         await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
 
     await callback.answer()

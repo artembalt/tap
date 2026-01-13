@@ -54,6 +54,16 @@ async def cmd_start_with_args(message: Message, command: CommandObject, state: F
         except ValueError:
             logger.error(f"Неверный формат seller_id: {args}")
 
+    # Обработка удаления из избранного
+    if args and args.startswith("fdel_"):
+        try:
+            ad_id = args.replace("fdel_", "")
+            logger.info(f"Удаляем из избранного: ad_id={ad_id}, user={message.from_user.id}")
+            await remove_from_favorites_deeplink(message, ad_id)
+            return
+        except Exception as e:
+            logger.error(f"Ошибка удаления из избранного: {e}")
+
     # Обработка добавления в избранное
     if args and args.startswith("fav_"):
         try:
@@ -467,3 +477,37 @@ async def add_to_favorites_from_deeplink(message: Message, ad_id: str):
                 "❌ Не удалось добавить в избранное. Попробуйте позже.",
                 reply_markup=get_main_reply_keyboard()
             )
+
+
+async def remove_from_favorites_deeplink(message: Message, ad_id: str):
+    """Удалить объявление из избранного через deep link"""
+    user_id = message.from_user.id
+
+    # Проверяем, есть ли в избранном
+    is_favorite = await FavoritesQueries.is_in_favorites(user_id, ad_id)
+
+    if not is_favorite:
+        await message.answer(
+            "❌ Это объявление не в вашем избранном.",
+            reply_markup=get_main_reply_keyboard()
+        )
+        return
+
+    # Удаляем из избранного
+    success = await FavoritesQueries.remove_from_favorites(user_id, ad_id)
+
+    if success:
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⭐ Перейти в избранное", callback_data="favorites_back")]
+        ])
+
+        await message.answer(
+            "✅ Объявление удалено из избранного!",
+            reply_markup=keyboard
+        )
+    else:
+        await message.answer(
+            "❌ Не удалось удалить из избранного. Попробуйте позже.",
+            reply_markup=get_main_reply_keyboard()
+        )
