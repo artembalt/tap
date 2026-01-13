@@ -4,6 +4,7 @@
 import logging
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.exceptions import TelegramAPIError
 
 from bot.database.queries import FavoritesQueries, AdQueries
 from bot.database.connection import get_db_session
@@ -19,31 +20,21 @@ FAVORITES_PER_PAGE = 50
 
 
 def get_favorites_keyboard(favorites: list, offset: int, total: int) -> InlineKeyboardMarkup:
-    """Клавиатура со списком избранного - заголовок-ссылка + кнопка удаления в каждой строке"""
+    """Клавиатура с кнопками удаления и пагинацией"""
     buttons = []
 
-    # Каждое объявление: [Заголовок-ссылка] [❌ Удалить]
-    for ad in favorites:
-        link = get_ad_link(ad)
-        title = ad.title[:35] + "..." if len(ad.title) > 35 else ad.title
-
-        row = []
-
-        # Кнопка с заголовком (ссылка или callback)
-        if link:
-            row.append(InlineKeyboardButton(text=f"📌 {title}", url=link))
-        else:
-            row.append(InlineKeyboardButton(
-                text=f"📌 {title}",
-                callback_data=f"fav_view_{ad.id}"
-            ))
-
-        # Кнопка удаления
+    # Кнопки удаления (по 10 в ряд)
+    row = []
+    for i, ad in enumerate(favorites):
+        num = offset + i + 1
         row.append(InlineKeyboardButton(
-            text="❌",
+            text=f"❌{num}",
             callback_data=f"fav_del_{ad.id}"
         ))
-
+        if len(row) == 10:
+            buttons.append(row)
+            row = []
+    if row:
         buttons.append(row)
 
     # Навигация (пагинация)
@@ -144,18 +135,30 @@ async def get_user_favorites_with_count(user_id: int, limit: int = 50, offset: i
         return [], 0
 
 
-def get_favorites_text(total: int, offset: int, count: int) -> str:
-    """Формирует текст для страницы избранного"""
-    text = f"⭐ <b>Избранное</b> ({total} шт.)\n\n"
+def format_favorites_text(favorites: list, offset: int, total: int) -> str:
+    """Формирует текстовое сообщение со списком избранного"""
+    # Заголовок с пагинацией
+    start_num = offset + 1
+    end_num = offset + len(favorites)
 
     if total > FAVORITES_PER_PAGE:
-        page = (offset // FAVORITES_PER_PAGE) + 1
-        total_pages = (total + FAVORITES_PER_PAGE - 1) // FAVORITES_PER_PAGE
-        text += f"📄 Страница {page} из {total_pages}\n"
-        text += f"Показано: {offset + 1}–{offset + count} из {total}\n\n"
+        text = f"⭐ <b>Избранное</b> ({start_num}-{end_num} из {total})\n\n"
+    else:
+        text = f"⭐ <b>Избранное</b> ({total})\n\n"
 
-    text += "Нажмите на заголовок — перейти к объявлению\n"
-    text += "Нажмите ❌ — удалить из избранного"
+    # Список объявлений
+    for i, ad in enumerate(favorites, start_num):
+        # Получаем ссылку на объявление
+        channel_link = get_ad_link(ad)
+        title_display = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
+
+        if channel_link:
+            text += f"{i}. <a href=\"{channel_link}\">{title_display}</a>  ❌\n"
+        else:
+            text += f"{i}. {title_display}  ❌\n"
+
+    text += "\n👆 Нажмите на заголовок — открыть объявление"
+    text += "\n🗑 Нажмите ❌N — удалить объявление N из избранного"
 
     return text
 
@@ -176,9 +179,9 @@ async def show_favorites(message: Message):
         )
         return
 
-    text = get_favorites_text(total, offset=0, count=len(favorites))
+    text = format_favorites_text(favorites, offset=0, total=total)
     keyboard = get_favorites_keyboard(favorites, offset=0, total=total)
-    await message.answer(text, reply_markup=keyboard)
+    await message.answer(text, reply_markup=keyboard, disable_web_page_preview=True)
 
 
 @router.callback_query(F.data.startswith("favorites_page_"))
@@ -195,13 +198,13 @@ async def favorites_page(callback: CallbackQuery):
         await callback.answer("Список пуст", show_alert=True)
         return
 
-    text = get_favorites_text(total, offset=offset, count=len(favorites))
+    text = format_favorites_text(favorites, offset=offset, total=total)
     keyboard = get_favorites_keyboard(favorites, offset=offset, total=total)
 
     try:
-        await callback.message.edit_text(text, reply_markup=keyboard)
-    except:
-        await callback.message.answer(text, reply_markup=keyboard)
+        await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+    except TelegramAPIError:
+        await callback.message.answer(text, reply_markup=keyboard, disable_web_page_preview=True)
     await callback.answer()
 
 
@@ -245,7 +248,7 @@ async def view_favorite_ad(callback: CallbackQuery):
 
 @router.callback_query(F.data.startswith("fav_del_"))
 async def quick_remove_from_favorites(callback: CallbackQuery):
-    """Быстрое удаление из избранного (кнопка ❌ в списке)"""
+    """Быстрое удаление из избранного (кнопка ❌N в списке)"""
     ad_id = callback.data.replace("fav_del_", "")
     user_id = callback.from_user.id
 
@@ -260,17 +263,20 @@ async def quick_remove_from_favorites(callback: CallbackQuery):
         favorites, total = await get_user_favorites_with_count(user_id, limit=FAVORITES_PER_PAGE, offset=0)
 
         if not favorites:
-            await callback.message.edit_text(
-                "⭐ <b>Избранное пусто</b>\n\n"
-                "Добавляйте объявления в избранное, нажимая кнопку "
-                "«⭐ В избранное» под объявлениями в каналах."
-            )
+            try:
+                await callback.message.edit_text(
+                    "⭐ <b>Избранное пусто</b>\n\n"
+                    "Добавляйте объявления в избранное, нажимая кнопку "
+                    "«⭐ В избранное» под объявлениями в каналах."
+                )
+            except TelegramAPIError:
+                pass
         else:
-            text = get_favorites_text(total, offset=0, count=len(favorites))
+            text = format_favorites_text(favorites, offset=0, total=total)
             keyboard = get_favorites_keyboard(favorites, offset=0, total=total)
             try:
-                await callback.message.edit_text(text, reply_markup=keyboard)
-            except:
+                await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+            except TelegramAPIError:
                 pass
     else:
         await callback.answer("❌ Ошибка удаления", show_alert=True)
@@ -298,9 +304,9 @@ async def remove_from_favorites(callback: CallbackQuery):
                 "«⭐ В избранное» под объявлениями в каналах."
             )
         else:
-            text = get_favorites_text(total, offset=0, count=len(favorites))
+            text = format_favorites_text(favorites, offset=0, total=total)
             keyboard = get_favorites_keyboard(favorites, offset=0, total=total)
-            await callback.message.edit_text(text, reply_markup=keyboard)
+            await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
     else:
         await callback.answer("❌ Ошибка удаления", show_alert=True)
 
@@ -319,9 +325,9 @@ async def favorites_back(callback: CallbackQuery):
             "«⭐ В избранное» под объявлениями в каналах."
         )
     else:
-        text = get_favorites_text(total, offset=0, count=len(favorites))
+        text = format_favorites_text(favorites, offset=0, total=total)
         keyboard = get_favorites_keyboard(favorites, offset=0, total=total)
-        await callback.message.edit_text(text, reply_markup=keyboard)
+        await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
 
     await callback.answer()
 
