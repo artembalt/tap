@@ -21,7 +21,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from bot.config import settings
 from bot.database.connection import init_db
-from bot.handlers import start, ad_creation, ad_management, search, profile, admin, payment, comments
+from bot.handlers import start, ad_creation, ad_management, search, profile, admin, payment, comments, favorites
 from bot.middlewares.antiflood import AntiFloodMiddleware
 from bot.middlewares.auth import AuthMiddleware
 from bot.utils.commands import set_bot_commands
@@ -165,6 +165,7 @@ async def main():
     dp.include_router(payment.router)
     dp.include_router(admin.router)
     dp.include_router(comments.router)  # Мониторинг комментариев
+    dp.include_router(favorites.router)  # Избранное
     
     dp.startup.register(on_startup)
     dp.shutdown.register(on_shutdown)

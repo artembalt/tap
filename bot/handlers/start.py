@@ -13,7 +13,7 @@ from sqlalchemy import select, func
 
 from bot.keyboards.inline import get_main_menu_keyboard, get_back_keyboard
 from bot.keyboards.reply import get_main_reply_keyboard
-from bot.database.queries import UserQueries
+from bot.database.queries import UserQueries, FavoritesQueries, AdQueries
 from bot.database.connection import get_db_session
 from bot.database.models import User, Ad, AdStatus
 
@@ -43,7 +43,7 @@ async def cmd_start_with_args(message: Message, command: CommandObject, state: F
     """Обработка /start с параметрами (deep link)"""
     args = command.args
     logger.info(f"Deep link получен: args={args}, user={message.from_user.id}")
-    
+
     # Обработка профиля продавца
     if args and args.startswith("profile_"):
         try:
@@ -53,7 +53,17 @@ async def cmd_start_with_args(message: Message, command: CommandObject, state: F
             return
         except ValueError:
             logger.error(f"Неверный формат seller_id: {args}")
-    
+
+    # Обработка добавления в избранное
+    if args and args.startswith("fav_"):
+        try:
+            ad_id = args.replace("fav_", "")
+            logger.info(f"Добавляем в избранное: ad_id={ad_id}, user={message.from_user.id}")
+            await add_to_favorites_from_deeplink(message, ad_id)
+            return
+        except Exception as e:
+            logger.error(f"Ошибка добавления в избранное: {e}")
+
     # Обработка просмотра объявления
     if args and args.startswith("ad_"):
         try:
@@ -63,11 +73,11 @@ async def cmd_start_with_args(message: Message, command: CommandObject, state: F
             return
         except Exception as e:
             logger.error(f"Ошибка показа объявления: {e}")
-    
+
     # Для обычного /start - проверяем дебаунс
     if not _should_process_start(message.from_user.id):
         return
-    
+
     # Очищаем состояние при любом /start
     await state.clear()
     await _send_welcome(message)
@@ -390,3 +400,70 @@ async def show_ad_detail(message: Message, ad_id: str):
     except Exception as e:
         logger.error(f"Ошибка при показе объявления: {e}", exc_info=True)
         await message.answer("❌ Ошибка при загрузке объявления")
+
+
+async def add_to_favorites_from_deeplink(message: Message, ad_id: str):
+    """Добавить объявление в избранное через deep link из канала"""
+    user_id = message.from_user.id
+
+    # Сначала регистрируем/получаем пользователя
+    await UserQueries.get_or_create_user(
+        telegram_id=user_id,
+        username=message.from_user.username,
+        first_name=message.from_user.first_name,
+        last_name=message.from_user.last_name
+    )
+
+    # Проверяем, существует ли объявление
+    ad = await AdQueries.get_ad(ad_id)
+    if not ad:
+        await message.answer(
+            "❌ Объявление не найдено или было удалено.",
+            reply_markup=get_main_reply_keyboard()
+        )
+        return
+
+    if ad.status != AdStatus.ACTIVE.value:
+        await message.answer(
+            "❌ Это объявление больше неактивно.",
+            reply_markup=get_main_reply_keyboard()
+        )
+        return
+
+    # Проверяем, есть ли уже в избранном
+    is_favorite = await FavoritesQueries.is_in_favorites(user_id, ad_id)
+
+    if is_favorite:
+        # Уже в избранном - предлагаем удалить
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="❌ Удалить из избранного",
+                callback_data=f"fav_remove_{ad_id}"
+            )],
+            [InlineKeyboardButton(text="⭐ Перейти в избранное", callback_data="favorites_back")]
+        ])
+
+        await message.answer(
+            f"⭐ Объявление «{ad.title[:40]}...» уже в избранном!",
+            reply_markup=keyboard
+        )
+    else:
+        # Добавляем в избранное
+        success = await FavoritesQueries.add_to_favorites(user_id, ad_id)
+
+        if success:
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⭐ Перейти в избранное", callback_data="favorites_back")]
+            ])
+
+            await message.answer(
+                f"✅ Объявление «{ad.title[:40]}...» добавлено в избранное!",
+                reply_markup=keyboard
+            )
+        else:
+            await message.answer(
+                "❌ Не удалось добавить в избранное. Попробуйте позже.",
+                reply_markup=get_main_reply_keyboard()
+            )
