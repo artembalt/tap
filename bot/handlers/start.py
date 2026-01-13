@@ -285,21 +285,30 @@ async def show_seller_profile(message: Message, seller_id: int, offset: int = 0,
                     ad_link = None
                     channel_msgs = ad.channel_message_ids or {}
 
+                    def extract_msg_id(msg_ids):
+                        """Извлечь первый message_id (поддержка старого и нового формата)"""
+                        if isinstance(msg_ids, list):
+                            return msg_ids[0] if msg_ids else None
+                        return msg_ids
+
                     # Сначала ищем канал категории
                     region_config = CHANNELS_CONFIG.get(ad.region, {})
                     category_channels = region_config.get("categories", {})
                     category_channel = category_channels.get(ad.category, "")
 
                     if category_channel and category_channel in channel_msgs:
-                        msg_id = channel_msgs[category_channel]
-                        channel_username = category_channel.replace("@", "")
-                        ad_link = f"https://t.me/{channel_username}/{msg_id}"
+                        msg_id = extract_msg_id(channel_msgs[category_channel])
+                        if msg_id:
+                            channel_username = category_channel.replace("@", "")
+                            ad_link = f"https://t.me/{channel_username}/{msg_id}"
                     elif channel_msgs:
                         # Берём первый доступный канал
-                        for channel, msg_id in channel_msgs.items():
+                        for channel, msg_ids in channel_msgs.items():
                             if channel.startswith("@"):
-                                channel_username = channel.replace("@", "")
-                                ad_link = f"https://t.me/{channel_username}/{msg_id}"
+                                msg_id = extract_msg_id(msg_ids)
+                                if msg_id:
+                                    channel_username = channel.replace("@", "")
+                                    ad_link = f"https://t.me/{channel_username}/{msg_id}"
                                 break
 
                     if ad_link:

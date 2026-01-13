@@ -75,8 +75,12 @@ async def find_ad_by_channel_message(channel_id: int, message_id: int):
 
             for ad in ads:
                 channel_msgs = ad.channel_message_ids or {}
-                for channel, msg_id in channel_msgs.items():
-                    if msg_id == message_id:
+                for channel, msg_ids in channel_msgs.items():
+                    # Поддержка старого формата (int) и нового (list)
+                    if isinstance(msg_ids, list):
+                        if message_id in msg_ids:
+                            return ad
+                    elif msg_ids == message_id:
                         return ad
 
             return None
@@ -103,17 +107,26 @@ async def notify_seller(bot: Bot, ad: Ad, comment: Message):
         main_channel = region_config.get("main", "")
         category_channel = region_config.get("categories", {}).get(ad.category, "")
 
+        def extract_msg_id(msg_ids):
+            """Извлечь первый message_id (поддержка старого и нового формата)"""
+            if isinstance(msg_ids, list):
+                return msg_ids[0] if msg_ids else None
+            return msg_ids
+
         # Приоритет: канал категории, потом любой не-main
         if category_channel and category_channel in channel_msgs:
             channel_clean = category_channel.lstrip("@")
-            msg_id = channel_msgs[category_channel]
-            ad_link = f"https://t.me/{channel_clean}/{msg_id}"
+            msg_id = extract_msg_id(channel_msgs[category_channel])
+            if msg_id:
+                ad_link = f"https://t.me/{channel_clean}/{msg_id}"
         else:
             # Берём первый канал который не main
-            for channel, msg_id in channel_msgs.items():
+            for channel, msg_ids in channel_msgs.items():
                 if channel.startswith("@") and channel != main_channel:
                     channel_clean = channel.lstrip("@")
-                    ad_link = f"https://t.me/{channel_clean}/{msg_id}"
+                    msg_id = extract_msg_id(msg_ids)
+                    if msg_id:
+                        ad_link = f"https://t.me/{channel_clean}/{msg_id}"
                     break
 
         # Формируем заголовок (кликабельный если есть ссылка)

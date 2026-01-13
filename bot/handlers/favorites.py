@@ -54,28 +54,36 @@ def get_favorites_keyboard(offset: int, total: int) -> InlineKeyboardMarkup:
 
 
 def get_ad_link(ad: Ad) -> str:
-    """Получить ссылку на объявление в канале"""
+    """Получить ссылку на объявление в канале рубрики"""
     if not ad.channel_message_ids:
         return ""
 
     region = ad.region
     category = ad.category
 
-    # Ищем канал категории
+    def extract_msg_id(msg_ids):
+        """Извлечь первый message_id (поддержка старого и нового формата)"""
+        if isinstance(msg_ids, list):
+            return msg_ids[0] if msg_ids else None
+        return msg_ids
+
+    # Ищем канал категории (рубрики)
     channel_config = CHANNELS_CONFIG.get(region, {})
     category_channel = channel_config.get('categories', {}).get(category, '')
 
     if category_channel and category_channel in ad.channel_message_ids:
-        msg_id = ad.channel_message_ids[category_channel]
-        channel_username = category_channel.replace("@", "")
-        return f"https://t.me/{channel_username}/{msg_id}"
+        msg_id = extract_msg_id(ad.channel_message_ids[category_channel])
+        if msg_id:
+            channel_username = category_channel.replace("@", "")
+            return f"https://t.me/{channel_username}/{msg_id}"
 
     # Если нет канала категории, ищем основной канал
     main_channel = channel_config.get('main', '')
     if main_channel and main_channel in ad.channel_message_ids:
-        msg_id = ad.channel_message_ids[main_channel]
-        channel_username = main_channel.replace("@", "")
-        return f"https://t.me/{channel_username}/{msg_id}"
+        msg_id = extract_msg_id(ad.channel_message_ids[main_channel])
+        if msg_id:
+            channel_username = main_channel.replace("@", "")
+            return f"https://t.me/{channel_username}/{msg_id}"
 
     return ""
 
