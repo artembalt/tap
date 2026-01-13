@@ -84,6 +84,26 @@ async def cmd_start_with_args(message: Message, command: CommandObject, state: F
         except Exception as e:
             logger.error(f"Ошибка показа объявления: {e}")
 
+    # Обработка удаления объявления (из Мои объявления)
+    if args and args.startswith("del_"):
+        try:
+            ad_id = args.replace("del_", "")
+            logger.info(f"Запрос удаления объявления: ad_id={ad_id}, user={message.from_user.id}")
+            await confirm_delete_ad(message, ad_id)
+            return
+        except Exception as e:
+            logger.error(f"Ошибка удаления объявления: {e}")
+
+    # Обработка редактирования объявления
+    if args and args.startswith("edit_"):
+        try:
+            ad_id = args.replace("edit_", "")
+            logger.info(f"Запрос редактирования объявления: ad_id={ad_id}, user={message.from_user.id}")
+            await show_edit_menu(message, ad_id)
+            return
+        except Exception as e:
+            logger.error(f"Ошибка редактирования объявления: {e}")
+
     # Для обычного /start - проверяем дебаунс
     if not _should_process_start(message.from_user.id):
         return
@@ -578,7 +598,7 @@ async def add_to_favorites_from_deeplink(message: Message, ad_id: str):
 
 
 async def remove_from_favorites_deeplink(message: Message, ad_id: str):
-    """Удалить объявление из избранного через deep link"""
+    """Показать подтверждение удаления из избранного через deep link"""
     user_id = message.from_user.id
 
     # Проверяем, есть ли в избранном
@@ -591,21 +611,156 @@ async def remove_from_favorites_deeplink(message: Message, ad_id: str):
         )
         return
 
-    # Удаляем из избранного
+    # Получаем название объявления
+    ad = await AdQueries.get_ad(ad_id)
+    ad_title = ad.title[:40] + "..." if ad and len(ad.title) > 40 else (ad.title if ad else "Объявление")
+
+    # Показываем подтверждение
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"fav_del_confirm_{ad_id}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="favorites_back")
+        ]
+    ])
+
+    await message.answer(
+        f"🗑 Удалить из избранного?\n\n«{ad_title}»",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("fav_del_confirm_"))
+async def confirm_remove_from_favorites(callback: CallbackQuery):
+    """Подтверждение удаления из избранного"""
+    ad_id = callback.data.replace("fav_del_confirm_", "")
+    user_id = callback.from_user.id
+
     success = await FavoritesQueries.remove_from_favorites(user_id, ad_id)
 
     if success:
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="⭐ Перейти в избранное", callback_data="favorites_back")]
-        ])
+        await callback.answer("✅ Удалено из избранного", show_alert=False)
 
-        await message.answer(
-            "✅ Объявление удалено из избранного!",
-            reply_markup=keyboard
-        )
+        # Показываем обновлённый список избранного
+        from bot.handlers.favorites import get_user_favorites_with_count, format_favorites_text, get_favorites_keyboard, FAVORITES_PER_PAGE
+
+        favorites, total = await get_user_favorites_with_count(user_id, limit=FAVORITES_PER_PAGE, offset=0)
+
+        if not favorites:
+            await callback.message.edit_text(
+                "⭐ <b>Избранное пусто</b>\n\n"
+                "Добавляйте объявления в избранное, нажимая кнопку "
+                "«⭐ В избранное» под объявлениями в каналах."
+            )
+        else:
+            text = format_favorites_text(favorites, offset=0, total=total)
+            keyboard = get_favorites_keyboard(offset=0, total=total)
+            await callback.message.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
     else:
-        await message.answer(
-            "❌ Не удалось удалить из избранного. Попробуйте позже.",
-            reply_markup=get_main_reply_keyboard()
-        )
+        await callback.answer("❌ Ошибка удаления", show_alert=True)
+
+
+# =============================================================================
+# УДАЛЕНИЕ И РЕДАКТИРОВАНИЕ ОБЪЯВЛЕНИЙ (из Мои объявления)
+# =============================================================================
+
+async def confirm_delete_ad(message: Message, ad_id: str):
+    """Показать подтверждение удаления объявления"""
+    user_id = message.from_user.id
+
+    # Получаем объявление
+    ad = await AdQueries.get_ad(ad_id)
+
+    if not ad:
+        await message.answer("❌ Объявление не найдено.", reply_markup=get_main_reply_keyboard())
+        return
+
+    # Проверяем, принадлежит ли объявление пользователю
+    if ad.user_id != user_id:
+        await message.answer("❌ Это не ваше объявление.", reply_markup=get_main_reply_keyboard())
+        return
+
+    ad_title = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"ad_del_confirm_{ad_id}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads")
+        ]
+    ])
+
+    await message.answer(
+        f"🗑 <b>Удалить объявление?</b>\n\n«{ad_title}»\n\n"
+        "⚠️ Объявление будет удалено из каналов и из вашего списка.",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("ad_del_confirm_"))
+async def callback_confirm_delete_ad(callback: CallbackQuery):
+    """Подтверждение удаления объявления"""
+    ad_id = callback.data.replace("ad_del_confirm_", "")
+    user_id = callback.from_user.id
+
+    # Получаем объявление
+    ad = await AdQueries.get_ad(ad_id)
+
+    if not ad or ad.user_id != user_id:
+        await callback.answer("❌ Объявление не найдено или не ваше", show_alert=True)
+        return
+
+    # Удаляем объявление (меняем статус на DELETED)
+    try:
+        async with get_db_session() as session:
+            from sqlalchemy import update
+            stmt = update(Ad).where(Ad.id == ad.id).values(status=AdStatus.DELETED.value)
+            await session.execute(stmt)
+            await session.commit()
+
+        await callback.answer("✅ Объявление удалено", show_alert=False)
+
+        # Возвращаемся к списку объявлений
+        from bot.handlers.ad_management import show_user_ads
+        await show_user_ads(callback.message, user_id, offset=0, edit=True)
+
+    except Exception as e:
+        logger.error(f"Ошибка удаления объявления: {e}")
+        await callback.answer("❌ Ошибка удаления", show_alert=True)
+
+
+async def show_edit_menu(message: Message, ad_id: str):
+    """Показать меню редактирования объявления"""
+    user_id = message.from_user.id
+
+    # Получаем объявление
+    ad = await AdQueries.get_ad(ad_id)
+
+    if not ad:
+        await message.answer("❌ Объявление не найдено.", reply_markup=get_main_reply_keyboard())
+        return
+
+    if ad.user_id != user_id:
+        await message.answer("❌ Это не ваше объявление.", reply_markup=get_main_reply_keyboard())
+        return
+
+    ad_title = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
+
+    # Формируем цену
+    if ad.price:
+        price_text = f"{int(ad.price):,}".replace(",", " ") + " ₽"
+    else:
+        price_text = "Договорная"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить заголовок", callback_data=f"edit_title_{ad_id}")],
+        [InlineKeyboardButton(text="📝 Изменить описание", callback_data=f"edit_desc_{ad_id}")],
+        [InlineKeyboardButton(text="💰 Изменить цену", callback_data=f"edit_price_{ad_id}")],
+        [InlineKeyboardButton(text="◀️ Назад к объявлениям", callback_data="my_ads")]
+    ])
+
+    await message.answer(
+        f"✏️ <b>Редактирование объявления</b>\n\n"
+        f"📌 {ad_title}\n"
+        f"₽ {price_text}\n\n"
+        f"Выберите что изменить:",
+        reply_markup=keyboard
+    )

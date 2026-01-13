@@ -141,6 +141,8 @@ async def show_user_ads(message: Message, user_id: int, offset: int = 0, edit: b
     else:
         text = f"📋 <b>Ваши объявления</b> ({total_count})\n\n"
 
+    bot_username = settings.BOT_USERNAME
+
     for i, ad in enumerate(ads, start_num):
         status_emoji = {
             "active": "✅",
@@ -151,7 +153,7 @@ async def show_user_ads(message: Message, user_id: int, offset: int = 0, edit: b
 
         # Формируем цену
         if ad.price:
-            price_text = f"{int(ad.price):,}₽".replace(",", " ")
+            price_text = f"{int(ad.price):,}".replace(",", " ")
         else:
             pf = ad.premium_features or {}
             price_text = pf.get('price_text', 'Договорная')
@@ -161,14 +163,20 @@ async def show_user_ads(message: Message, user_id: int, offset: int = 0, edit: b
 
         title_display = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
 
+        # Заголовок
         if channel_link:
             text += f"{i}. {status_emoji} <a href=\"{channel_link}\">{title_display}</a>\n"
         else:
             text += f"{i}. {status_emoji} {title_display}\n"
 
-        text += f"   💰 {price_text}\n\n"
+        # Цена
+        text += f"   ₽ {price_text}\n"
 
-    text += "👆 Нажмите на заголовок чтобы открыть объявление в канале"
+        # Ссылки на действия (deep links)
+        edit_link = f"https://t.me/{bot_username}?start=edit_{ad.id}"
+        delete_link = f"https://t.me/{bot_username}?start=del_{ad.id}"
+
+        text += f"   <a href=\"{edit_link}\">✏️ Изменить</a>  <a href=\"{delete_link}\">🗑 Удалить</a>\n\n"
 
     # Клавиатура с пагинацией
     keyboard = get_my_ads_keyboard(offset, total_count)
@@ -220,3 +228,216 @@ async def cancel_editing(message: Message, state: FSMContext):
         await message.answer("❌ Отменено", reply_markup=get_back_keyboard())
     else:
         await message.answer("Нечего отменять")
+
+
+# =============================================================================
+# РЕДАКТИРОВАНИЕ ОБЪЯВЛЕНИЯ
+# =============================================================================
+
+from bot.database.connection import get_db_session
+from bot.database.models import Ad
+
+
+@router.callback_query(F.data.startswith("edit_title_"))
+async def start_edit_title(callback: CallbackQuery, state: FSMContext):
+    """Начать редактирование заголовка"""
+    ad_id = callback.data.replace("edit_title_", "")
+
+    # Сохраняем ad_id в состоянии
+    await state.update_data(edit_ad_id=ad_id)
+    await state.set_state(EditAdStates.waiting_for_new_title)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads")]
+    ])
+
+    await callback.message.edit_text(
+        "✏️ <b>Введите новый заголовок:</b>\n\n"
+        "(от 5 до 100 символов)",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_desc_"))
+async def start_edit_description(callback: CallbackQuery, state: FSMContext):
+    """Начать редактирование описания"""
+    ad_id = callback.data.replace("edit_desc_", "")
+
+    await state.update_data(edit_ad_id=ad_id)
+    await state.set_state(EditAdStates.waiting_for_new_description)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads")]
+    ])
+
+    await callback.message.edit_text(
+        "📝 <b>Введите новое описание:</b>\n\n"
+        "(от 10 до 2000 символов)",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_price_"))
+async def start_edit_price(callback: CallbackQuery, state: FSMContext):
+    """Начать редактирование цены"""
+    ad_id = callback.data.replace("edit_price_", "")
+
+    await state.update_data(edit_ad_id=ad_id)
+    await state.set_state(EditAdStates.waiting_for_new_price)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads")]
+    ])
+
+    await callback.message.edit_text(
+        "💰 <b>Введите новую цену:</b>\n\n"
+        "Введите число (например: 15000) или текст (например: Договорная)",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.message(EditAdStates.waiting_for_new_title)
+async def process_new_title(message: Message, state: FSMContext):
+    """Обработка нового заголовка"""
+    new_title = message.text.strip()
+
+    if len(new_title) < 5 or len(new_title) > 100:
+        await message.answer("❌ Заголовок должен быть от 5 до 100 символов. Попробуйте ещё раз:")
+        return
+
+    data = await state.get_data()
+    ad_id = data.get("edit_ad_id")
+
+    if not ad_id:
+        await state.clear()
+        await message.answer("❌ Ошибка. Попробуйте заново.", reply_markup=get_back_keyboard())
+        return
+
+    # Обновляем заголовок в БД
+    try:
+        async with get_db_session() as session:
+            from sqlalchemy import update
+            import uuid
+
+            stmt = update(Ad).where(Ad.id == uuid.UUID(ad_id)).values(title=new_title)
+            await session.execute(stmt)
+            await session.commit()
+
+        await state.clear()
+        await message.answer(
+            f"✅ Заголовок обновлён!\n\nНовый заголовок: «{new_title}»",
+            reply_markup=get_back_keyboard()
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка обновления заголовка: {e}")
+        await state.clear()
+        await message.answer("❌ Ошибка сохранения. Попробуйте позже.", reply_markup=get_back_keyboard())
+
+
+@router.message(EditAdStates.waiting_for_new_description)
+async def process_new_description(message: Message, state: FSMContext):
+    """Обработка нового описания"""
+    new_desc = message.text.strip()
+
+    if len(new_desc) < 10 or len(new_desc) > 2000:
+        await message.answer("❌ Описание должно быть от 10 до 2000 символов. Попробуйте ещё раз:")
+        return
+
+    data = await state.get_data()
+    ad_id = data.get("edit_ad_id")
+
+    if not ad_id:
+        await state.clear()
+        await message.answer("❌ Ошибка. Попробуйте заново.", reply_markup=get_back_keyboard())
+        return
+
+    try:
+        async with get_db_session() as session:
+            from sqlalchemy import update
+            import uuid
+
+            stmt = update(Ad).where(Ad.id == uuid.UUID(ad_id)).values(description=new_desc)
+            await session.execute(stmt)
+            await session.commit()
+
+        await state.clear()
+        await message.answer(
+            f"✅ Описание обновлено!",
+            reply_markup=get_back_keyboard()
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка обновления описания: {e}")
+        await state.clear()
+        await message.answer("❌ Ошибка сохранения. Попробуйте позже.", reply_markup=get_back_keyboard())
+
+
+@router.message(EditAdStates.waiting_for_new_price)
+async def process_new_price(message: Message, state: FSMContext):
+    """Обработка новой цены"""
+    price_text = message.text.strip()
+
+    data = await state.get_data()
+    ad_id = data.get("edit_ad_id")
+
+    if not ad_id:
+        await state.clear()
+        await message.answer("❌ Ошибка. Попробуйте заново.", reply_markup=get_back_keyboard())
+        return
+
+    # Пробуем распарсить как число
+    try:
+        # Убираем пробелы, запятые, символ рубля
+        clean_price = price_text.replace(" ", "").replace(",", "").replace("₽", "").replace("р", "").replace("руб", "")
+        new_price = float(clean_price)
+
+        async with get_db_session() as session:
+            from sqlalchemy import update
+            import uuid
+
+            stmt = update(Ad).where(Ad.id == uuid.UUID(ad_id)).values(price=new_price)
+            await session.execute(stmt)
+            await session.commit()
+
+        await state.clear()
+        price_display = f"{int(new_price):,}".replace(",", " ") + " ₽"
+        await message.answer(
+            f"✅ Цена обновлена!\n\nНовая цена: {price_display}",
+            reply_markup=get_back_keyboard()
+        )
+
+    except ValueError:
+        # Если это не число - сохраняем как текст в premium_features
+        try:
+            async with get_db_session() as session:
+                from sqlalchemy import update, select
+                import uuid
+
+                # Получаем текущие premium_features
+                result = await session.execute(
+                    select(Ad.premium_features).where(Ad.id == uuid.UUID(ad_id))
+                )
+                current_pf = result.scalar() or {}
+                current_pf['price_text'] = price_text
+
+                stmt = update(Ad).where(Ad.id == uuid.UUID(ad_id)).values(
+                    price=None,
+                    premium_features=current_pf
+                )
+                await session.execute(stmt)
+                await session.commit()
+
+            await state.clear()
+            await message.answer(
+                f"✅ Цена обновлена!\n\nНовая цена: {price_text}",
+                reply_markup=get_back_keyboard()
+            )
+
+        except Exception as e:
+            logger.error(f"Ошибка обновления цены: {e}")
+            await state.clear()
+            await message.answer("❌ Ошибка сохранения. Попробуйте позже.", reply_markup=get_back_keyboard())
