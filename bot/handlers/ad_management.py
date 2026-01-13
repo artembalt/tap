@@ -9,13 +9,119 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramAPIError
 
+from aiogram import Bot
+
 from bot.database.queries import AdQueries
 from bot.keyboards.inline import get_back_keyboard
 from bot.config import settings
-from shared.regions_config import REGIONS, CATEGORIES, CHANNELS_CONFIG
+from shared.regions_config import REGIONS, CATEGORIES, CHANNELS_CONFIG, get_city_hashtag, get_subcategory_hashtag
 
 router = Router(name='ad_management')
 logger = logging.getLogger(__name__)
+
+
+async def update_ad_in_channels(ad_id: str, bot: Bot) -> tuple[int, int]:
+    """
+    Обновить объявление во всех каналах где оно опубликовано.
+
+    Returns:
+        (updated_count, error_count)
+    """
+    from bot.database.connection import get_db_session
+    from bot.database.models import Ad
+    from sqlalchemy import select
+    import uuid
+
+    try:
+        async with get_db_session() as session:
+            result = await session.execute(
+                select(Ad).where(Ad.id == uuid.UUID(ad_id))
+            )
+            ad = result.scalar_one_or_none()
+
+            if not ad or not ad.channel_message_ids:
+                return 0, 0
+
+            # Получаем username бота
+            bot_info = await bot.get_me()
+            bot_username = bot_info.username
+
+            # Формируем хэштеги
+            hashtags = []
+            if ad.subcategory:
+                hashtags.append(get_subcategory_hashtag(ad.subcategory))
+            if ad.category and ad.region:
+                category_name = CATEGORIES.get(ad.category, ad.category)
+                region_name = REGIONS.get(ad.region, ad.region)
+                cat_clean = category_name.split()[-1] if ' ' in category_name else category_name
+                reg_clean = region_name.replace(' ', '_').replace('-', '_')
+                hashtags.append(f"#{cat_clean}_{reg_clean}")
+            if ad.city:
+                hashtags.append(get_city_hashtag(ad.city))
+
+            hashtags_text = " ".join(hashtags) if hashtags else ""
+
+            # Формируем цену
+            if ad.price:
+                price_text = f"{int(ad.price):,}".replace(",", " ") + f" {ad.currency or 'RUB'}"
+            else:
+                pf = ad.premium_features or {}
+                price_text = pf.get('price_text', 'Не указана')
+
+            # Формируем текст объявления
+            new_text = f"""<b>{ad.title}</b>
+
+{ad.description}
+
+💰 {price_text}
+
+{hashtags_text}
+
+━━━━━━━━━━━━━━━
+😎 <a href="tg://user?id={ad.user_id}">Написать продавцу</a>
+👾 <a href="https://t.me/{bot_username}?start=profile_{ad.user_id}">Профиль продавца</a>
+⭐ <a href="https://t.me/{bot_username}?start=fav_{ad.id}">В избранное</a>
+📢 <a href="https://t.me/{bot_username}">Разместить объявление</a>"""
+
+            updated = 0
+            errors = 0
+
+            # Обновляем в каждом канале
+            for channel, msg_id in ad.channel_message_ids.items():
+                try:
+                    if ad.photos or ad.video:
+                        await bot.edit_message_caption(
+                            chat_id=channel,
+                            message_id=msg_id,
+                            caption=new_text,
+                            parse_mode="HTML"
+                        )
+                    else:
+                        await bot.edit_message_text(
+                            chat_id=channel,
+                            message_id=msg_id,
+                            text=new_text,
+                            parse_mode="HTML",
+                            disable_web_page_preview=True
+                        )
+                    updated += 1
+                    logger.info(f"[EDIT] Обновлено в канале {channel}")
+                except TelegramAPIError as e:
+                    error_msg = str(e).lower()
+                    if "message is not modified" in error_msg:
+                        updated += 1  # Текст уже актуален
+                    else:
+                        logger.error(f"[EDIT] Ошибка обновления в {channel}: {e}")
+                        errors += 1
+                except Exception as e:
+                    logger.error(f"[EDIT] Неожиданная ошибка в {channel}: {e}")
+                    errors += 1
+
+            return updated, errors
+
+    except Exception as e:
+        logger.error(f"[EDIT] Ошибка обновления в каналах: {e}")
+        return 0, 1
 
 # Количество объявлений на странице
 ADS_PER_PAGE = 50
