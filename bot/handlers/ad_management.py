@@ -132,6 +132,8 @@ class EditAdStates(StatesGroup):
     waiting_for_new_title = State()
     waiting_for_new_description = State()
     waiting_for_new_price = State()
+    waiting_for_new_photos = State()
+    waiting_for_new_video = State()
 
 
 def get_my_ads_keyboard(offset: int, total: int) -> InlineKeyboardMarkup:
