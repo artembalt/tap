@@ -865,7 +865,7 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
     
     hashtags_text = " ".join(hashtags) if hashtags else ""
     
-    # ===== Текст объявления с ссылкой на профиль =====
+    # ===== Текст объявления с ссылками =====
     text = f"""<b>{data.get('title', '')}</b>
 
 {data.get('description', '')}
@@ -877,6 +877,7 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
 ━━━━━━━━━━━━━━━
 😎 <a href="tg://user?id={ad.user_id}">Написать продавцу</a>
 👾 <a href="https://t.me/{bot_info.username}?start=profile_{ad.user_id}">Профиль продавца</a>
+⭐ <a href="https://t.me/{bot_info.username}?start=fav_{ad.id}">В избранное</a>
 📢 <a href="https://t.me/{bot_info.username}">Разместить объявление</a>"""
 
     photos = data.get('photos', [])
@@ -889,49 +890,23 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
     if main_channel:
         channels.append(main_channel)
 
-    # Кнопка "В избранное" - ведёт в бота с deep link
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-    favorite_keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="⭐ В избранное",
-            url=f"https://t.me/{bot_info.username}?start=fav_{ad.id}"
-        )]
-    ])
-
     for channel in channels:
         # Retry для каждого канала (2 попытки)
         for attempt in range(2):
             try:
                 if photos:
                     if len(photos) == 1:
-                        msg = await bot.send_photo(
-                            chat_id=channel, photo=photos[0], caption=text,
-                            reply_markup=favorite_keyboard
-                        )
+                        msg = await bot.send_photo(chat_id=channel, photo=photos[0], caption=text)
                     else:
                         media = [InputMediaPhoto(media=photos[0], caption=text)]
                         for p in photos[1:10]:
                             media.append(InputMediaPhoto(media=p))
                         msgs = await bot.send_media_group(chat_id=channel, media=media)
                         msg = msgs[0] if msgs else None
-                        # Для media_group отправляем кнопку отдельным сообщением
-                        if msg:
-                            await bot.send_message(
-                                chat_id=channel,
-                                text="👆 Добавить в избранное:",
-                                reply_markup=favorite_keyboard,
-                                reply_to_message_id=msg.message_id
-                            )
                 elif video:
-                    msg = await bot.send_video(
-                        chat_id=channel, video=video, caption=text,
-                        reply_markup=favorite_keyboard
-                    )
+                    msg = await bot.send_video(chat_id=channel, video=video, caption=text)
                 else:
-                    msg = await bot.send_message(
-                        chat_id=channel, text=text, disable_web_page_preview=True,
-                        reply_markup=favorite_keyboard
-                    )
+                    msg = await bot.send_message(chat_id=channel, text=text, disable_web_page_preview=True)
 
                 if msg:
                     channel_ids[channel] = msg.message_id

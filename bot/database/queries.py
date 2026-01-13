@@ -406,67 +406,115 @@ class AdQueries:
 # FAVORITES QUERIES
 # =============================================================================
 
+from bot.database.models import ad_favorites
+
 class FavoritesQueries:
-    """Запросы для работы с избранным"""
-    
+    """Запросы для работы с избранным - прямые запросы к таблице"""
+
     @staticmethod
     async def add_to_favorites(user_id: int, ad_id: str) -> bool:
         """Добавить объявление в избранное"""
         try:
+            import uuid
+            ad_uuid = uuid.UUID(ad_id) if isinstance(ad_id, str) else ad_id
+
             async with get_db_session() as session:
-                user = await session.get(User, user_id)
-                ad = await session.get(Ad, ad_id)
-                
-                if user and ad:
-                    if ad not in user.favorites:
-                        user.favorites.append(ad)
-                        ad.favorites_count += 1
-                        await session.commit()
-                        return True
+                # Проверяем, есть ли уже в избранном
+                check_stmt = select(ad_favorites).where(
+                    and_(
+                        ad_favorites.c.user_id == user_id,
+                        ad_favorites.c.ad_id == ad_uuid
+                    )
+                )
+                existing = await session.execute(check_stmt)
+                if existing.first():
+                    return True  # Уже есть
+
+                # Добавляем в избранное
+                from datetime import datetime
+                insert_stmt = ad_favorites.insert().values(
+                    user_id=user_id,
+                    ad_id=ad_uuid,
+                    created_at=datetime.utcnow()
+                )
+                await session.execute(insert_stmt)
+
+                # Увеличиваем счетчик
+                ad = await session.get(Ad, ad_uuid)
+                if ad:
+                    ad.favorites_count = (ad.favorites_count or 0) + 1
+
+                await session.commit()
+                return True
         except Exception as e:
             logger.error(f"Error adding to favorites: {e}")
         return False
-    
+
     @staticmethod
     async def remove_from_favorites(user_id: int, ad_id: str) -> bool:
         """Удалить объявление из избранного"""
         try:
+            import uuid
+            ad_uuid = uuid.UUID(ad_id) if isinstance(ad_id, str) else ad_id
+
             async with get_db_session() as session:
-                user = await session.get(User, user_id)
-                ad = await session.get(Ad, ad_id)
-                
-                if user and ad:
-                    if ad in user.favorites:
-                        user.favorites.remove(ad)
-                        if ad.favorites_count > 0:
-                            ad.favorites_count -= 1
-                        await session.commit()
-                        return True
+                # Удаляем из избранного
+                delete_stmt = ad_favorites.delete().where(
+                    and_(
+                        ad_favorites.c.user_id == user_id,
+                        ad_favorites.c.ad_id == ad_uuid
+                    )
+                )
+                result = await session.execute(delete_stmt)
+
+                if result.rowcount > 0:
+                    # Уменьшаем счетчик
+                    ad = await session.get(Ad, ad_uuid)
+                    if ad and ad.favorites_count > 0:
+                        ad.favorites_count -= 1
+                    await session.commit()
+                    return True
         except Exception as e:
             logger.error(f"Error removing from favorites: {e}")
         return False
-    
+
     @staticmethod
     async def get_user_favorites(user_id: int, limit: int = 50) -> List[Ad]:
         """Получить избранные объявления пользователя"""
         try:
             async with get_db_session() as session:
-                user = await session.get(User, user_id)
-                if user:
-                    # Возвращаем только активные объявления из избранного
-                    return [ad for ad in user.favorites if ad.status == AdStatus.ACTIVE.value][:limit]
+                stmt = (
+                    select(Ad)
+                    .join(ad_favorites, Ad.id == ad_favorites.c.ad_id)
+                    .where(
+                        ad_favorites.c.user_id == user_id,
+                        Ad.status == AdStatus.ACTIVE.value
+                    )
+                    .order_by(ad_favorites.c.created_at.desc())
+                    .limit(limit)
+                )
+                result = await session.execute(stmt)
+                return list(result.scalars().all())
         except Exception as e:
             logger.error(f"Error getting favorites: {e}")
         return []
-    
+
     @staticmethod
     async def is_in_favorites(user_id: int, ad_id: str) -> bool:
         """Проверить, есть ли объявление в избранном"""
         try:
+            import uuid
+            ad_uuid = uuid.UUID(ad_id) if isinstance(ad_id, str) else ad_id
+
             async with get_db_session() as session:
-                user = await session.get(User, user_id)
-                if user:
-                    return any(str(ad.id) == ad_id for ad in user.favorites)
+                stmt = select(ad_favorites).where(
+                    and_(
+                        ad_favorites.c.user_id == user_id,
+                        ad_favorites.c.ad_id == ad_uuid
+                    )
+                )
+                result = await session.execute(stmt)
+                return result.first() is not None
         except Exception as e:
             logger.error(f"Error checking favorites: {e}")
         return False
