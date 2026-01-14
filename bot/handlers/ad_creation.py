@@ -708,8 +708,103 @@ async def process_delivery(callback: CallbackQuery, state: FSMContext):
     delivery_name = DELIVERY_TYPES.get(delivery, delivery)
     await callback.message.answer(f"✅ <b>Доставка:</b> {delivery_name}")
     
+    await ask_link_title(callback.message, state)
+    await callback.answer()
+
+
+# ========== ВНЕШНЯЯ ССЫЛКА ==========
+async def ask_link_title(message: Message, state: FSMContext):
+    logger.info("[LINK] ask_link_title")
+    await state.set_state(AdCreation.link_title)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏭ Пропустить", callback_data="link_skip")]
+    ])
+
+    await message.answer(
+        "🔗 <b>Шаг 13: Внешняя ссылка</b> (опционально)\n\n"
+        "Введите <b>название ссылки</b>, например:\n"
+        "• Геопозиция\n"
+        "• Моё объявление на Авито\n"
+        "• Мой сайт\n\n"
+        "Или нажмите «Пропустить»",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data == "link_skip")
+async def skip_link(callback: CallbackQuery, state: FSMContext):
+    logger.info("[LINK] skip")
+    await safe_clear_keyboard(callback)
     await show_preview(callback.message, state)
     await callback.answer()
+
+
+@router.message(AdCreation.link_title)
+async def process_link_title(message: Message, state: FSMContext):
+    logger.info(f"[LINK] title: {message.text[:30] if message.text else 'None'}")
+
+    if not message.text:
+        await message.answer("❌ Введите название ссылки")
+        return
+
+    link_title = message.text.strip()[:100]
+
+    # Проверка на спам/мат в названии
+    filter_result = validate_content(link_title)
+    if not filter_result.is_valid:
+        await message.answer(get_rejection_message(filter_result))
+        return
+
+    await state.update_data(link_title=link_title)
+    await message.answer(f"✅ <b>Название:</b> {link_title}")
+    await ask_link_url(message, state)
+
+
+async def ask_link_url(message: Message, state: FSMContext):
+    logger.info("[LINK] ask_link_url")
+    await state.set_state(AdCreation.link_url)
+
+    await message.answer(
+        "🔗 Теперь введите <b>ссылку</b> (URL):\n\n"
+        "Например:\n"
+        "• https://yandex.ru/maps/...\n"
+        "• https://avito.ru/...\n"
+        "• https://example.com"
+    )
+
+
+@router.message(AdCreation.link_url)
+async def process_link_url(message: Message, state: FSMContext):
+    logger.info(f"[LINK] url: {message.text[:50] if message.text else 'None'}")
+
+    if not message.text:
+        await message.answer("❌ Введите ссылку")
+        return
+
+    import re
+    url = message.text.strip()
+
+    # Валидация URL
+    url_pattern = r'^https?://[^\s<>"{}|\\^`\[\]]+$'
+    if not re.match(url_pattern, url):
+        await message.answer(
+            "❌ Неверный формат ссылки.\n\n"
+            "Ссылка должна начинаться с <code>http://</code> или <code>https://</code>"
+        )
+        return
+
+    if len(url) > 500:
+        await message.answer("❌ Ссылка слишком длинная (максимум 500 символов)")
+        return
+
+    await state.update_data(link_url=url)
+
+    data = await state.get_data()
+    link_title = data.get('link_title', 'Ссылка')
+    await message.answer(f"✅ <b>Ссылка добавлена:</b> <a href=\"{url}\">{link_title}</a>")
+
+    await show_preview(message, state)
 
 
 # ========== ПРЕВЬЮ ==========
@@ -719,6 +814,11 @@ async def show_preview(message: Message, state: FSMContext):
     await state.set_state(AdCreation.confirm)
 
     description = data.get('description') or ''
+
+    # Формируем блок ссылки если есть
+    link_block = ""
+    if data.get('link_title') and data.get('link_url'):
+        link_block = f"\n🔗 <a href=\"{data.get('link_url')}\">{data.get('link_title')}</a>"
 
     text = f"""📢 <b>Превью</b>
 
@@ -731,7 +831,7 @@ async def show_preview(message: Message, state: FSMContext):
 {description[:200]}{'...' if len(description) > 200 else ''}
 
 💰 {data.get('price', 'Не указана')}
-📸 {len(data.get('photos', []))} фото
+📸 {len(data.get('photos', []))} фото{link_block}
 
 <b>Опубликовать?</b>"""
 
@@ -782,6 +882,8 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
                 ad_type=data.get('deal_type'),
                 photos=data.get('photos', []),
                 video=data.get('video'),
+                link_title=data.get('link_title'),
+                link_url=data.get('link_url'),
                 status=AdStatus.ACTIVE.value,
                 created_at=datetime.utcnow(),
                 channel_message_ids={},
@@ -921,12 +1023,17 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
     
     hashtags_text = " ".join(hashtags) if hashtags else ""
     
+    # ===== Формируем блок внешней ссылки =====
+    external_link = ""
+    if data.get('link_title') and data.get('link_url'):
+        external_link = f"\n🔗 <a href=\"{data.get('link_url')}\">{data.get('link_title')}</a>"
+
     # ===== Текст объявления с ссылками =====
     text = f"""<b>{data.get('title', '')}</b>
 
 {data.get('description', '')}
 
-💰 {data.get('price', 'Не указана')}
+💰 {data.get('price', 'Не указана')}{external_link}
 
 {hashtags_text}
 
