@@ -764,8 +764,12 @@ async def callback_confirm_delete_ad(callback: CallbackQuery):
 
         logger.info(f"[DELETE] Завершено: удалено {deleted_count} сообщений, ошибок {error_count}")
 
-        if deleted_count > 0:
+        if deleted_count > 0 and error_count == 0:
             await callback.answer(f"✅ Удалено из каналов ({deleted_count} сообщ.)", show_alert=False)
+        elif error_count > 0 and deleted_count == 0:
+            await callback.answer("⚠️ Объявление снято. Из каналов удалить не удалось (старое сообщение)", show_alert=True)
+        elif error_count > 0:
+            await callback.answer(f"⚠️ Частично удалено ({deleted_count} из {deleted_count + error_count})", show_alert=True)
         else:
             await callback.answer("✅ Объявление удалено", show_alert=False)
 
