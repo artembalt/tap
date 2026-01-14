@@ -446,11 +446,24 @@ async def process_new_title(message: Message, state: FSMContext):
         await message.answer("❌ Заголовок должен быть от 5 до 100 символов. Попробуйте ещё раз:")
         return
 
-    # Проверка контента
+    # Быстрая rule-based проверка
     filter_result = validate_content(new_title)
     if not filter_result.is_valid:
         await message.answer(get_rejection_message(filter_result))
         return
+
+    # LLM-проверка
+    checking_msg = await message.answer("🔍 <i>Проверяю текст...</i>")
+    try:
+        llm_result = await validate_content_with_llm(new_title)
+        if not llm_result.is_valid:
+            await checking_msg.delete()
+            await message.answer(get_rejection_message(llm_result))
+            return
+        await checking_msg.delete()
+    except Exception as e:
+        logger.error(f"[EDIT_TITLE] LLM error: {e}")
+        await checking_msg.delete()
 
     data = await state.get_data()
     ad_id = data.get("edit_ad_id")
@@ -498,11 +511,24 @@ async def process_new_description(message: Message, state: FSMContext):
         await message.answer("❌ Описание должно быть от 10 до 2000 символов. Попробуйте ещё раз:")
         return
 
-    # Проверка контента
+    # Быстрая rule-based проверка
     filter_result = validate_content(new_desc)
     if not filter_result.is_valid:
         await message.answer(get_rejection_message(filter_result))
         return
+
+    # LLM-проверка
+    checking_msg = await message.answer("🔍 <i>Проверяю описание...</i>")
+    try:
+        llm_result = await validate_content_with_llm(new_desc)
+        if not llm_result.is_valid:
+            await checking_msg.delete()
+            await message.answer(get_rejection_message(llm_result))
+            return
+        await checking_msg.delete()
+    except Exception as e:
+        logger.error(f"[EDIT_DESC] LLM error: {e}")
+        await checking_msg.delete()
 
     data = await state.get_data()
     ad_id = data.get("edit_ad_id")
