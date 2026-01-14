@@ -605,10 +605,6 @@ async def process_price(message: Message, state: FSMContext):
         await message.answer("❌ Цена не может быть отрицательной")
         return
 
-    if price > 100_000_000:  # 100 млн максимум
-        await message.answer("❌ Слишком большая цена (максимум 100 000 000 ₽)")
-        return
-
     price_display = f"{int(price):,} ₽".replace(",", " ")
 
     # Сохраняем цену и показываем подтверждение
