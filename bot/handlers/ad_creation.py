@@ -13,6 +13,7 @@ from aiogram.exceptions import TelegramNetworkError, TelegramAPIError
 
 from bot.database.connection import get_db_session
 from bot.database.models import Ad, AdStatus
+from bot.utils.content_filter import validate_content, get_rejection_message
 from shared.regions_config import (
     REGIONS, CITIES, CATEGORIES, SUBCATEGORIES, DEAL_TYPES,
     CONDITION_TYPES, DELIVERY_TYPES, CATEGORIES_WITH_DELIVERY,
@@ -307,12 +308,19 @@ async def ask_title(message: Message, state: FSMContext):
 @router.message(AdCreation.title)
 async def process_title(message: Message, state: FSMContext):
     logger.info(f"[TITLE] process_title: {message.text[:30] if message.text else 'None'}")
-    
+
     if not message.text:
         await message.answer("❌ Введите текст")
         return
-    
+
     title = message.text.strip()[:100]
+
+    # Проверка контента
+    filter_result = validate_content(title)
+    if not filter_result.is_valid:
+        await message.answer(get_rejection_message(filter_result))
+        return
+
     await state.update_data(title=title)
     await message.answer(f"✅ <b>Заголовок:</b> {title}")
     await ask_description(message, state)
