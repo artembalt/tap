@@ -93,6 +93,12 @@ class Settings:
     
     # API ключи для внешних сервисов
     GOOGLE_MAPS_API_KEY: str = os.getenv("GOOGLE_MAPS_API_KEY", "")
+
+    # Claude API для LLM-модерации
+    CLAUDE_API_KEY: str = os.getenv("CLAUDE_API_KEY", "")
+    CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-3-haiku-20240307")  # haiku для скорости/дешевизны
+    LLM_MODERATION_ENABLED: bool = os.getenv("LLM_MODERATION_ENABLED", "True").lower() == "true"
+    LLM_MODERATION_THRESHOLD: float = float(os.getenv("LLM_MODERATION_THRESHOLD", "0.7"))  # 0-1
     
     @property
     def database_url(self) -> str:

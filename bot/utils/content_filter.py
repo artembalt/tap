@@ -394,3 +394,52 @@ def validate_content(text: str) -> FilterResult:
 def get_rejection_message(result: FilterResult) -> str:
     """Получить сообщение для пользователя при отклонении"""
     return f"❌ <b>Текст не прошёл проверку</b>\n\n{result.reason}\n\nПожалуйста, исправьте текст и попробуйте снова."
+
+
+# ============================================================================
+# LLM-МОДЕРАЦИЯ (второй уровень)
+# ============================================================================
+
+async def validate_content_with_llm(text: str) -> FilterResult:
+    """
+    Полная проверка контента с LLM.
+    Гибридный подход: сначала быстрый rule-based, потом LLM для сложных случаев.
+
+    Использование:
+        result = await validate_content_with_llm("Продам iPhone 15 Pro Max")
+        if not result.is_valid:
+            await message.answer(get_rejection_message(result))
+    """
+    if not text:
+        return FilterResult(is_valid=True)
+
+    # Шаг 1: Быстрая rule-based проверка
+    rule_result = validate_content(text)
+    if not rule_result.is_valid:
+        return rule_result
+
+    # Шаг 2: LLM-проверка (если включена)
+    try:
+        from bot.utils.llm_moderation import moderate_with_llm, ModerationCategory
+
+        llm_result = await moderate_with_llm(text)
+
+        if not llm_result.is_safe:
+            logger.warning(
+                f"[LLM-FILTER] Контент отклонён LLM: category={llm_result.category.value}, "
+                f"confidence={llm_result.confidence:.2f}, reason='{llm_result.reason}', "
+                f"text='{text[:50]}...'"
+            )
+            return FilterResult(
+                is_valid=False,
+                reason=llm_result.reason or "Контент не прошёл автоматическую модерацию",
+                matched_word=f"[LLM:{llm_result.category.value}]"
+            )
+
+    except ImportError:
+        logger.debug("[LLM-FILTER] Модуль LLM-модерации не установлен")
+    except Exception as e:
+        logger.error(f"[LLM-FILTER] Ошибка LLM-модерации: {e}")
+        # Fail-open: если LLM недоступен, пропускаем (rule-based уже проверил)
+
+    return FilterResult(is_valid=True)

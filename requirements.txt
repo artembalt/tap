@@ -65,3 +65,6 @@ scikit-learn==1.4.0
 catboost==1.2.2
 numpy==1.26.3
 pandas==2.1.4
+
+# LLM moderation (optional - uses httpx for API calls)
+# anthropic==0.40.0  # Uncomment if you want to use the official SDK
