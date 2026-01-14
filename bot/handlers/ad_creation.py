@@ -662,7 +662,7 @@ async def price_negotiable(callback: CallbackQuery, state: FSMContext):
     if data.get('category') in CATEGORIES_WITH_DELIVERY:
         await ask_delivery(callback.message, state)
     else:
-        await show_preview(callback.message, state)
+        await ask_link_title(callback.message, state)
     await callback.answer()
 
 
@@ -680,7 +680,7 @@ async def price_negotiable_confirm(callback: CallbackQuery, state: FSMContext):
     if data.get('category') in CATEGORIES_WITH_DELIVERY:
         await ask_delivery(callback.message, state)
     else:
-        await show_preview(callback.message, state)
+        await ask_link_title(callback.message, state)
     await callback.answer()
 
 

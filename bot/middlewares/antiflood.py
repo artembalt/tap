@@ -16,6 +16,13 @@ EXCLUDED_FSM_STATES = (
     "AdCreation:",  # Все состояния создания объявления
 )
 
+# Системные user_id Telegram — исключаем из антифлуда
+SYSTEM_USER_IDS = {
+    777000,      # Telegram (пересылка сообщений в каналы)
+    136817688,   # Channel Bot
+    1087968824,  # Group Anonymous Bot
+}
+
 
 class AntiFloodMiddleware(BaseMiddleware):
     """
@@ -52,6 +59,10 @@ class AntiFloodMiddleware(BaseMiddleware):
         # Получаем user_id
         user_id = event.from_user.id if event.from_user else None
         if not user_id:
+            return await handler(event, data)
+
+        # Исключаем системные аккаунты Telegram
+        if user_id in SYSTEM_USER_IDS:
             return await handler(event, data)
 
         # Проверяем FSM состояние - исключаем шаги создания объявления
