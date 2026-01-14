@@ -400,13 +400,13 @@ def get_rejection_message(result: FilterResult) -> str:
 # LLM-МОДЕРАЦИЯ (второй уровень)
 # ============================================================================
 
-async def validate_content_with_llm(text: str) -> FilterResult:
+async def validate_content_with_llm(text: str, ad_category: str = None) -> FilterResult:
     """
     Полная проверка контента с LLM.
     Гибридный подход: сначала быстрый rule-based, потом LLM для сложных случаев.
 
     Использование:
-        result = await validate_content_with_llm("Продам iPhone 15 Pro Max")
+        result = await validate_content_with_llm("Продам траву", ad_category="Растения")
         if not result.is_valid:
             await message.answer(get_rejection_message(result))
     """
@@ -422,7 +422,7 @@ async def validate_content_with_llm(text: str) -> FilterResult:
     try:
         from bot.utils.llm_moderation import moderate_with_llm, ModerationCategory
 
-        llm_result = await moderate_with_llm(text)
+        llm_result = await moderate_with_llm(text, ad_category)
 
         if not llm_result.is_safe:
             logger.warning(

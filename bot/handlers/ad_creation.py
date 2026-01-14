@@ -326,7 +326,10 @@ async def process_title(message: Message, state: FSMContext):
     # LLM-проверка (показываем индикатор)
     checking_msg = await message.answer("🔍 <i>Проверяю текст...</i>")
     try:
-        llm_result = await validate_content_with_llm(title)
+        data = await state.get_data()
+        ad_category = data.get('category')  # Передаём категорию для контекста
+
+        llm_result = await validate_content_with_llm(title, ad_category=ad_category)
         if not llm_result.is_valid:
             await checking_msg.delete()
             await message.answer(get_rejection_message(llm_result))
@@ -371,9 +374,10 @@ async def process_description(message: Message, state: FSMContext):
         # Проверяем заголовок + описание вместе для лучшего контекста
         data = await state.get_data()
         title = data.get('title', '')
+        ad_category = data.get('category')  # Передаём категорию для контекста
         full_text = f"{title}\n\n{description}"
 
-        llm_result = await validate_content_with_llm(full_text)
+        llm_result = await validate_content_with_llm(full_text, ad_category=ad_category)
         if not llm_result.is_valid:
             await checking_msg.delete()
             await message.answer(get_rejection_message(llm_result))
