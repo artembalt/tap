@@ -14,7 +14,9 @@ from aiogram import Bot
 from bot.database.queries import AdQueries
 from bot.keyboards.inline import get_back_keyboard
 from bot.config import settings
-from bot.utils.content_filter import validate_content, get_rejection_message
+from bot.utils.content_filter import (
+    validate_content, validate_content_with_llm, get_rejection_message
+)
 from shared.regions_config import REGIONS, CATEGORIES, CHANNELS_CONFIG, get_city_hashtag, get_subcategory_hashtag
 
 router = Router(name='ad_management')

@@ -13,7 +13,9 @@ from aiogram.exceptions import TelegramNetworkError, TelegramAPIError
 
 from bot.database.connection import get_db_session
 from bot.database.models import Ad, AdStatus
-from bot.utils.content_filter import validate_content, get_rejection_message
+from bot.utils.content_filter import (
+    validate_content, validate_content_with_llm, get_rejection_message
+)
 from shared.regions_config import (
     REGIONS, CITIES, CATEGORIES, SUBCATEGORIES, DEAL_TYPES,
     CONDITION_TYPES, DELIVERY_TYPES, CATEGORIES_WITH_DELIVERY,
@@ -315,11 +317,25 @@ async def process_title(message: Message, state: FSMContext):
 
     title = message.text.strip()[:100]
 
-    # Проверка контента
+    # Быстрая rule-based проверка (бесплатно)
     filter_result = validate_content(title)
     if not filter_result.is_valid:
         await message.answer(get_rejection_message(filter_result))
         return
+
+    # LLM-проверка (показываем индикатор)
+    checking_msg = await message.answer("🔍 <i>Проверяю текст...</i>")
+    try:
+        llm_result = await validate_content_with_llm(title)
+        if not llm_result.is_valid:
+            await checking_msg.delete()
+            await message.answer(get_rejection_message(llm_result))
+            return
+        await checking_msg.delete()
+    except Exception as e:
+        logger.error(f"[TITLE] LLM error: {e}")
+        await checking_msg.delete()
+        # Fail-open: продолжаем, если LLM недоступен
 
     await state.update_data(title=title)
     await message.answer(f"✅ <b>Заголовок:</b> {title}")
@@ -343,11 +359,30 @@ async def process_description(message: Message, state: FSMContext):
 
     description = message.text.strip()[:1000]
 
-    # Проверка контента
+    # Быстрая rule-based проверка (бесплатно)
     filter_result = validate_content(description)
     if not filter_result.is_valid:
         await message.answer(get_rejection_message(filter_result))
         return
+
+    # LLM-проверка описания (показываем индикатор)
+    checking_msg = await message.answer("🔍 <i>Проверяю описание...</i>")
+    try:
+        # Проверяем заголовок + описание вместе для лучшего контекста
+        data = await state.get_data()
+        title = data.get('title', '')
+        full_text = f"{title}\n\n{description}"
+
+        llm_result = await validate_content_with_llm(full_text)
+        if not llm_result.is_valid:
+            await checking_msg.delete()
+            await message.answer(get_rejection_message(llm_result))
+            return
+        await checking_msg.delete()
+    except Exception as e:
+        logger.error(f"[DESC] LLM error: {e}")
+        await checking_msg.delete()
+        # Fail-open: продолжаем, если LLM недоступен
 
     await state.update_data(description=description)
 
