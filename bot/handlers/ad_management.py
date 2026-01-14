@@ -14,6 +14,7 @@ from aiogram import Bot
 from bot.database.queries import AdQueries
 from bot.keyboards.inline import get_back_keyboard
 from bot.config import settings
+from bot.utils.content_filter import validate_content, get_rejection_message
 from shared.regions_config import REGIONS, CATEGORIES, CHANNELS_CONFIG, get_city_hashtag, get_subcategory_hashtag
 
 router = Router(name='ad_management')
@@ -443,6 +444,12 @@ async def process_new_title(message: Message, state: FSMContext):
         await message.answer("❌ Заголовок должен быть от 5 до 100 символов. Попробуйте ещё раз:")
         return
 
+    # Проверка контента
+    filter_result = validate_content(new_title)
+    if not filter_result.is_valid:
+        await message.answer(get_rejection_message(filter_result))
+        return
+
     data = await state.get_data()
     ad_id = data.get("edit_ad_id")
 
@@ -487,6 +494,12 @@ async def process_new_description(message: Message, state: FSMContext):
 
     if len(new_desc) < 10 or len(new_desc) > 2000:
         await message.answer("❌ Описание должно быть от 10 до 2000 символов. Попробуйте ещё раз:")
+        return
+
+    # Проверка контента
+    filter_result = validate_content(new_desc)
+    if not filter_result.is_valid:
+        await message.answer(get_rejection_message(filter_result))
         return
 
     data = await state.get_data()
