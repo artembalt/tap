@@ -89,13 +89,19 @@ class ClaudeModerator:
         self.threshold = threshold
         self.api_url = "https://api.anthropic.com/v1/messages"
 
-    async def moderate(self, text: str, ad_category: str = None) -> LLMModerationResult:
+    async def moderate(
+        self,
+        text: str,
+        ad_category: str = None,
+        ad_subcategory: str = None
+    ) -> LLMModerationResult:
         """
         Модерация текста объявления.
 
         Args:
             text: Текст для проверки (заголовок + описание)
             ad_category: Категория объявления (для контекста)
+            ad_subcategory: Рубрика объявления (для контекста)
 
         Returns:
             LLMModerationResult с результатом модерации
@@ -118,7 +124,7 @@ class ClaudeModerator:
             )
 
         try:
-            result = await self._call_claude(text, ad_category)
+            result = await self._call_claude(text, ad_category, ad_subcategory)
             return result
         except Exception as e:
             logger.error(f"[LLM] Ошибка модерации: {e}")
@@ -130,7 +136,12 @@ class ClaudeModerator:
                 reason=f"Ошибка LLM: {str(e)[:50]}"
             )
 
-    async def _call_claude(self, text: str, ad_category: str = None) -> LLMModerationResult:
+    async def _call_claude(
+        self,
+        text: str,
+        ad_category: str = None,
+        ad_subcategory: str = None
+    ) -> LLMModerationResult:
         """Вызов Claude API"""
         headers = {
             "Content-Type": "application/json",
@@ -138,9 +149,16 @@ class ClaudeModerator:
             "anthropic-version": "2023-06-01"
         }
 
-        # Формируем запрос с категорией для контекста
+        # Формируем запрос с категорией и рубрикой для контекста
+        context_parts = []
         if ad_category:
-            user_content = f"Категория объявления: {ad_category}\n\nТекст объявления:\n{text[:2000]}"
+            context_parts.append(f"Категория: {ad_category}")
+        if ad_subcategory:
+            context_parts.append(f"Рубрика: {ad_subcategory}")
+
+        if context_parts:
+            context = "\n".join(context_parts)
+            user_content = f"{context}\n\nТекст объявления:\n{text[:2000]}"
         else:
             user_content = f"Проверь это объявление:\n\n{text[:2000]}"
 
@@ -240,12 +258,16 @@ def get_moderator() -> Optional[ClaudeModerator]:
     return _moderator
 
 
-async def moderate_with_llm(text: str, ad_category: str = None) -> LLMModerationResult:
+async def moderate_with_llm(
+    text: str,
+    ad_category: str = None,
+    ad_subcategory: str = None
+) -> LLMModerationResult:
     """
     Удобная функция для модерации текста.
 
     Использование:
-        result = await moderate_with_llm("Продам траву газонную", ad_category="Растения")
+        result = await moderate_with_llm("Продам семена", ad_category="Растения", ad_subcategory="Рассада и семена")
         if not result.is_safe:
             print(f"Отклонено: {result.reason}")
     """
@@ -257,7 +279,7 @@ async def moderate_with_llm(text: str, ad_category: str = None) -> LLMModeration
             confidence=0.0,
             reason="LLM-модерация не настроена"
         )
-    return await moderator.moderate(text, ad_category)
+    return await moderator.moderate(text, ad_category, ad_subcategory)
 
 
 # Маппинг категорий на русские названия
