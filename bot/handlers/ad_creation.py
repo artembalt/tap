@@ -65,6 +65,8 @@ class AdCreation(StatesGroup):
     video = State()
     price = State()
     delivery = State()
+    link_title = State()   # Название ссылки (опционально)
+    link_url = State()     # URL ссылки
     confirm = State()
 
 
