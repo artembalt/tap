@@ -768,7 +768,8 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
 
         # Ссылка на канал категории
         if category_channel and category_channel in channel_ids:
-            msg_id = channel_ids[category_channel]
+            msg_ids = channel_ids[category_channel]
+            msg_id = msg_ids[0] if isinstance(msg_ids, list) else msg_ids
             channel_username = category_channel.replace("@", "")
             ad_link = f"https://t.me/{channel_username}/{msg_id}"
             result_text += f"📂 Категория: <a href=\"{ad_link}\">{category_name}</a>\n"
@@ -777,7 +778,8 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
 
         # Ссылка на общий канал
         if main_channel and main_channel in channel_ids:
-            msg_id = channel_ids[main_channel]
+            msg_ids = channel_ids[main_channel]
+            msg_id = msg_ids[0] if isinstance(msg_ids, list) else msg_ids
             channel_username = main_channel.replace("@", "")
             ad_link = f"https://t.me/{channel_username}/{msg_id}"
             result_text += f"📢 Общий канал: <a href=\"{ad_link}\">{main_channel}</a>"

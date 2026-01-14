@@ -720,7 +720,11 @@ async def callback_confirm_delete_ad(callback: CallbackQuery):
     # Удаляем объявление из каналов и меняем статус на DELETED
     try:
         # Сначала удаляем из всех каналов
-        deleted_from_channels = 0
+        deleted_count = 0
+        error_count = 0
+
+        logger.info(f"[DELETE] Начинаем удаление объявления {ad_id}, channel_message_ids={ad.channel_message_ids}")
+
         if ad.channel_message_ids:
             for channel, msg_ids in ad.channel_message_ids.items():
                 # Поддержка старого формата (одно число) и нового (список)
@@ -729,16 +733,27 @@ async def callback_confirm_delete_ad(callback: CallbackQuery):
                 elif not isinstance(msg_ids, list):
                     msg_ids = [msg_ids]
 
+                logger.info(f"[DELETE] Удаляем из канала {channel}, msg_ids={msg_ids}")
+
                 # Удаляем все сообщения (для media_group их несколько)
                 for msg_id in msg_ids:
                     try:
                         await callback.bot.delete_message(chat_id=channel, message_id=msg_id)
-                        logger.info(f"[DELETE] Удалено из канала {channel}, msg_id={msg_id}")
+                        logger.info(f"[DELETE] ✓ Удалено из канала {channel}, msg_id={msg_id}")
+                        deleted_count += 1
                     except TelegramAPIError as e:
-                        logger.warning(f"[DELETE] Не удалось удалить из {channel} msg_id={msg_id}: {e}")
+                        error_msg = str(e).lower()
+                        if "message to delete not found" in error_msg:
+                            logger.info(f"[DELETE] Сообщение уже удалено: {channel} msg_id={msg_id}")
+                            deleted_count += 1  # Считаем как удалённое
+                        else:
+                            logger.warning(f"[DELETE] ✗ Не удалось удалить из {channel} msg_id={msg_id}: {e}")
+                            error_count += 1
                     except Exception as e:
-                        logger.error(f"[DELETE] Ошибка удаления из {channel}: {e}")
-                deleted_from_channels += 1
+                        logger.error(f"[DELETE] ✗ Ошибка удаления из {channel}: {e}")
+                        error_count += 1
+        else:
+            logger.warning(f"[DELETE] У объявления {ad_id} нет channel_message_ids")
 
         # Меняем статус на DELETED
         async with get_db_session() as session:
@@ -747,8 +762,10 @@ async def callback_confirm_delete_ad(callback: CallbackQuery):
             await session.execute(stmt)
             await session.commit()
 
-        if deleted_from_channels > 0:
-            await callback.answer(f"✅ Удалено из {deleted_from_channels} канал(ов)", show_alert=False)
+        logger.info(f"[DELETE] Завершено: удалено {deleted_count} сообщений, ошибок {error_count}")
+
+        if deleted_count > 0:
+            await callback.answer(f"✅ Удалено из каналов ({deleted_count} сообщ.)", show_alert=False)
         else:
             await callback.answer("✅ Объявление удалено", show_alert=False)
 

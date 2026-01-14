@@ -312,28 +312,38 @@ async def show_user_ads(message: Message, user_id: int, offset: int = 0, edit: b
 
 def get_channel_link(ad) -> str | None:
     """
-    Получить ссылку на объявление в канале рубрики.
+    Получить ссылку на объявление в канале рубрики (категории).
     Формат: https://t.me/channel_username/message_id
 
-    Первый канал в словаре - это канал рубрики (category_channel),
-    второй - общий канал (main_channel).
+    Приоритет: канал категории > первый доступный канал
     """
     channel_message_ids = ad.channel_message_ids or {}
 
     if not channel_message_ids:
         return None
 
-    # Берём первый канал (канал рубрики)
+    def extract_msg_id(msg_ids):
+        """Извлечь первый message_id (поддержка старого и нового формата)"""
+        if isinstance(msg_ids, list):
+            return msg_ids[0] if msg_ids else None
+        return msg_ids
+
+    # Сначала пытаемся найти канал категории
+    region_config = CHANNELS_CONFIG.get(ad.region, {})
+    category_channels = region_config.get("categories", {})
+    category_channel = category_channels.get(ad.category, "")
+
+    if category_channel and category_channel in channel_message_ids:
+        msg_id = extract_msg_id(channel_message_ids[category_channel])
+        if msg_id:
+            channel_clean = category_channel.lstrip('@')
+            return f"https://t.me/{channel_clean}/{msg_id}"
+
+    # Если канал категории не найден - берём первый доступный
     for channel_username, msg_ids in channel_message_ids.items():
         if channel_username and msg_ids:
-            # Поддержка старого формата (int) и нового (list)
-            if isinstance(msg_ids, list):
-                message_id = msg_ids[0] if msg_ids else None
-            else:
-                message_id = msg_ids
-
+            message_id = extract_msg_id(msg_ids)
             if message_id:
-                # Убираем @ если есть
                 channel_clean = channel_username.lstrip('@')
                 return f"https://t.me/{channel_clean}/{message_id}"
 
