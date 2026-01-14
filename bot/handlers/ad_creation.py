@@ -336,20 +336,27 @@ async def ask_description(message: Message, state: FSMContext):
 @router.message(AdCreation.description)
 async def process_description(message: Message, state: FSMContext):
     logger.info("[DESC] process_description")
-    
+
     if not message.text:
         await message.answer("❌ Введите текст")
         return
-    
+
     description = message.text.strip()[:1000]
+
+    # Проверка контента
+    filter_result = validate_content(description)
+    if not filter_result.is_valid:
+        await message.answer(get_rejection_message(filter_result))
+        return
+
     await state.update_data(description=description)
-    
+
     display = description[:50] + "..." if len(description) > 50 else description
     await message.answer(f"✅ <b>Описание:</b> {display}")
-    
+
     data = await state.get_data()
     deal_type = data.get('deal_type')
-    
+
     if deal_type in DEAL_TYPES_WITH_CONDITION:
         await ask_condition(message, state)
     else:
