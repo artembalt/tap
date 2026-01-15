@@ -640,9 +640,6 @@ async def price_confirm(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     await callback.message.answer(f"✅ <b>Цена:</b> {data.get('price')}")
 
-    # Показываем сообщение о подготовке превью
-    await callback.message.answer("⏳ Подготавливаю превью объявления...")
-
     if data.get('category') in CATEGORIES_WITH_DELIVERY:
         await ask_delivery(callback.message, state)
     else:
@@ -668,7 +665,6 @@ async def price_negotiable(callback: CallbackQuery, state: FSMContext):
 
     await state.update_data(price="Договорная")
     await callback.message.answer("✅ <b>Цена:</b> Договорная")
-    await callback.message.answer("⏳ Подготавливаю превью объявления...")
 
     data = await state.get_data()
     if data.get('category') in CATEGORIES_WITH_DELIVERY:
@@ -686,7 +682,6 @@ async def price_negotiable_confirm(callback: CallbackQuery, state: FSMContext):
 
     await state.update_data(price="Договорная")
     await callback.message.answer("✅ <b>Цена:</b> Договорная")
-    await callback.message.answer("⏳ Подготавливаю превью объявления...")
 
     data = await state.get_data()
     if data.get('category') in CATEGORIES_WITH_DELIVERY:
@@ -822,6 +817,10 @@ async def process_link_url(message: Message, state: FSMContext):
 # ========== ПРЕВЬЮ ==========
 async def show_preview(message: Message, state: FSMContext):
     logger.info("[PREVIEW] show_preview")
+
+    # Показываем сообщение о подготовке превью
+    await message.answer("⏳ Подготавливаю превью объявления...")
+
     data = await state.get_data()
     await state.set_state(AdCreation.confirm)
 
