@@ -765,9 +765,16 @@ async def process_link_title(message: Message, state: FSMContext):
         )
         return
 
-    # Базовая проверка на мат/спам (без строгой LLM модерации)
-    filter_result = validate_content(link_title)
-    if not filter_result.is_valid:
+    # LLM проверка с контекстом что это заголовок ссылки (мягкая модерация)
+    data = await state.get_data()
+    llm_result = await validate_content_with_llm(
+        link_title,
+        data.get('category', ''),
+        data.get('subcategory', ''),
+        content_type="link_title"
+    )
+
+    if not llm_result.is_valid:
         await message.answer("❌ Название содержит недопустимые слова. Введите другое.")
         return
 
@@ -843,7 +850,8 @@ async def process_link_url(message: Message, state: FSMContext):
     llm_result = await validate_content_with_llm(
         f"Ссылка с названием '{link_title}' ведёт на: {url}",
         data.get('category', ''),
-        data.get('subcategory', '')
+        data.get('subcategory', ''),
+        content_type="link_url"
     )
 
     if not llm_result.is_valid:

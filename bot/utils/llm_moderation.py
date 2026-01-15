@@ -93,7 +93,8 @@ class ClaudeModerator:
         self,
         text: str,
         ad_category: str = None,
-        ad_subcategory: str = None
+        ad_subcategory: str = None,
+        content_type: str = None
     ) -> LLMModerationResult:
         """
         Модерация текста объявления.
@@ -102,6 +103,7 @@ class ClaudeModerator:
             text: Текст для проверки (заголовок + описание)
             ad_category: Категория объявления (для контекста)
             ad_subcategory: Рубрика объявления (для контекста)
+            content_type: Тип контента (link_title, link_url, title, description)
 
         Returns:
             LLMModerationResult с результатом модерации
@@ -124,7 +126,7 @@ class ClaudeModerator:
             )
 
         try:
-            result = await self._call_claude(text, ad_category, ad_subcategory)
+            result = await self._call_claude(text, ad_category, ad_subcategory, content_type)
             return result
         except Exception as e:
             logger.error(f"[LLM] Ошибка модерации: {e}")
@@ -140,7 +142,8 @@ class ClaudeModerator:
         self,
         text: str,
         ad_category: str = None,
-        ad_subcategory: str = None
+        ad_subcategory: str = None,
+        content_type: str = None
     ) -> LLMModerationResult:
         """Вызов Claude API"""
         headers = {
@@ -156,11 +159,26 @@ class ClaudeModerator:
         if ad_subcategory:
             context_parts.append(f"Рубрика: {ad_subcategory}")
 
+        # Добавляем контекст типа контента
+        content_type_context = ""
+        if content_type == "link_title":
+            content_type_context = (
+                "\n\nВАЖНО: Это НАЗВАНИЕ ССЫЛКИ (заголовок кнопки), а не рекламный текст! "
+                "Названия типа 'Мой канал', 'Мой сайт', 'Геопозиция', 'Подробнее', 'Ссылка на товар' — "
+                "это НОРМАЛЬНЫЕ названия для кнопки-ссылки. Блокируй только явный мат, угрозы или спам."
+            )
+        elif content_type == "link_url":
+            content_type_context = (
+                "\n\nВАЖНО: Это URL ссылки, которую пользователь прикрепляет к объявлению. "
+                "Проверь, не ведёт ли ссылка на запрещённый контент (порно, наркотики, мошенничество). "
+                "Обычные ссылки на соцсети, магазины, карты — РАЗРЕШЕНЫ."
+            )
+
         if context_parts:
             context = "\n".join(context_parts)
-            user_content = f"{context}\n\nТекст объявления:\n{text[:2000]}"
+            user_content = f"{context}{content_type_context}\n\nТекст для проверки:\n{text[:2000]}"
         else:
-            user_content = f"Проверь это объявление:\n\n{text[:2000]}"
+            user_content = f"Проверь это:{content_type_context}\n\n{text[:2000]}"
 
         payload = {
             "model": self.model,
@@ -261,10 +279,17 @@ def get_moderator() -> Optional[ClaudeModerator]:
 async def moderate_with_llm(
     text: str,
     ad_category: str = None,
-    ad_subcategory: str = None
+    ad_subcategory: str = None,
+    content_type: str = None
 ) -> LLMModerationResult:
     """
     Удобная функция для модерации текста.
+
+    Args:
+        text: Текст для проверки
+        ad_category: Категория объявления
+        ad_subcategory: Рубрика объявления
+        content_type: Тип контента (link_title, link_url, title, description)
 
     Использование:
         result = await moderate_with_llm("Продам семена", ad_category="Растения", ad_subcategory="Рассада и семена")
@@ -279,7 +304,7 @@ async def moderate_with_llm(
             confidence=0.0,
             reason="LLM-модерация не настроена"
         )
-    return await moderator.moderate(text, ad_category, ad_subcategory)
+    return await moderator.moderate(text, ad_category, ad_subcategory, content_type)
 
 
 # Маппинг категорий на русские названия
