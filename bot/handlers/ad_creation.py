@@ -792,8 +792,8 @@ async def ask_link_url(message: Message, state: FSMContext):
         "Например:\n"
         "• https://yandex.ru/maps/...\n"
         "• avito.ru/...\n"
-        "• @channel_name (для Telegram)\n"
-        "• example.com"
+        "• t.me/channel_name\n"
+        "• @channel_name"
     )
 
 
@@ -819,16 +819,20 @@ async def process_link_url(message: Message, state: FSMContext):
                 "Имя канала/пользователя должно содержать 4-31 символ (буквы, цифры, _)"
             )
             return
+    # Обработка Telegram ссылок (t.me/... или telegram.me/...)
+    elif url.startswith(('t.me/', 'telegram.me/')):
+        url = f"https://{url}"
     # Автодобавление https:// если нет протокола
     elif not url.startswith(('http://', 'https://')):
-        # Проверяем что это похоже на домен
-        if re.match(r'^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', url):
+        # Проверяем что это похоже на домен (минимум x.xx)
+        if re.match(r'^[a-zA-Z0-9][a-zA-Z0-9.-]*\.[a-zA-Z]{2,}', url):
             url = f"https://{url}"
         else:
             await message.answer(
                 "❌ Неверный формат ссылки.\n\n"
                 "Введите корректную ссылку, например:\n"
                 "• example.com\n"
+                "• t.me/channel\n"
                 "• @channel_name"
             )
             return
