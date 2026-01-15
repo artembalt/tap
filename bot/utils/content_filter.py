@@ -481,16 +481,20 @@ async def validate_content_with_llm(
     if not text:
         return FilterResult(is_valid=True)
 
-    # Шаг 1: Быстрая rule-based проверка (пропускаем для link_title - там мягче правила)
-    if content_type != "link_title":
-        rule_result = validate_content(text)
-        if not rule_result.is_valid:
-            return rule_result
-    else:
+    # Шаг 1: Быстрая rule-based проверка (с учётом типа контента)
+    if content_type == "link_url":
+        # Для URL ссылки пропускаем rule-based (там и так URL), только LLM проверит контент
+        pass
+    elif content_type == "link_title":
         # Для заголовка ссылки только проверка на мат
         profanity_result = check_profanity(text)
         if not profanity_result.is_valid:
             return profanity_result
+    else:
+        # Для остального контента — полная проверка
+        rule_result = validate_content(text)
+        if not rule_result.is_valid:
+            return rule_result
 
     # Шаг 2: LLM-проверка (если включена)
     try:
