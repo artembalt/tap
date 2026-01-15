@@ -507,6 +507,18 @@ async def process_photo(message: Message, state: FSMContext):
     await message.answer(text, reply_markup=get_photo_done_keyboard())
 
 
+@router.message(AdCreation.photos, F.video)
+async def reject_video_in_photos(message: Message, state: FSMContext):
+    """Отклонение видео при загрузке фото"""
+    from bot.keyboards.inline import get_photo_done_keyboard
+    await message.answer(
+        "⚠️ На этом шаге можно загружать только <b>фото</b>.\n"
+        "Видео можно будет добавить на следующем шаге.\n\n"
+        "Отправьте фото или нажмите <b>Далее</b>.",
+        reply_markup=get_photo_done_keyboard()
+    )
+
+
 @router.callback_query(F.data == "photos_skip")
 async def skip_photos(callback: CallbackQuery, state: FSMContext):
     logger.info("[PHOTOS] skip")
