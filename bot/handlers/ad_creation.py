@@ -755,12 +755,20 @@ async def process_link_title(message: Message, state: FSMContext):
         await message.answer("❌ Введите название ссылки")
         return
 
-    link_title = message.text.strip()[:100]
+    link_title = message.text.strip()
 
-    # Проверка на спам/мат в названии
+    # Проверка длины (максимум 30 символов)
+    if len(link_title) > 30:
+        await message.answer(
+            f"❌ Название слишком длинное ({len(link_title)} симв.)\n\n"
+            "Максимум 30 символов. Сократите название."
+        )
+        return
+
+    # Базовая проверка на мат/спам (без строгой LLM модерации)
     filter_result = validate_content(link_title)
     if not filter_result.is_valid:
-        await message.answer(get_rejection_message(filter_result))
+        await message.answer("❌ Название содержит недопустимые слова. Введите другое.")
         return
 
     await state.update_data(link_title=link_title)
@@ -776,8 +784,9 @@ async def ask_link_url(message: Message, state: FSMContext):
         "🔗 Теперь введите <b>ссылку</b> (URL):\n\n"
         "Например:\n"
         "• https://yandex.ru/maps/...\n"
-        "• https://avito.ru/...\n"
-        "• https://example.com"
+        "• avito.ru/...\n"
+        "• @channel_name (для Telegram)\n"
+        "• example.com"
     )
 
 
@@ -792,23 +801,56 @@ async def process_link_url(message: Message, state: FSMContext):
     import re
     url = message.text.strip()
 
-    # Валидация URL
+    # Обработка Telegram ссылок (@username)
+    if url.startswith('@'):
+        username = url[1:]  # убираем @
+        if re.match(r'^[a-zA-Z][a-zA-Z0-9_]{3,30}$', username):
+            url = f"https://t.me/{username}"
+        else:
+            await message.answer(
+                "❌ Неверный формат Telegram ссылки.\n\n"
+                "Имя канала/пользователя должно содержать 4-31 символ (буквы, цифры, _)"
+            )
+            return
+    # Автодобавление https:// если нет протокола
+    elif not url.startswith(('http://', 'https://')):
+        # Проверяем что это похоже на домен
+        if re.match(r'^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', url):
+            url = f"https://{url}"
+        else:
+            await message.answer(
+                "❌ Неверный формат ссылки.\n\n"
+                "Введите корректную ссылку, например:\n"
+                "• example.com\n"
+                "• @channel_name"
+            )
+            return
+
+    # Финальная валидация URL
     url_pattern = r'^https?://[^\s<>"{}|\\^`\[\]]+$'
     if not re.match(url_pattern, url):
-        await message.answer(
-            "❌ Неверный формат ссылки.\n\n"
-            "Ссылка должна начинаться с <code>http://</code> или <code>https://</code>"
-        )
+        await message.answer("❌ Неверный формат ссылки.")
         return
 
     if len(url) > 500:
         await message.answer("❌ Ссылка слишком длинная (максимум 500 символов)")
         return
 
-    await state.update_data(link_url=url)
-
+    # Проверка ссылки на запрещённый контент через LLM
     data = await state.get_data()
     link_title = data.get('link_title', 'Ссылка')
+
+    llm_result = await validate_content_with_llm(
+        f"Ссылка с названием '{link_title}' ведёт на: {url}",
+        data.get('category', ''),
+        data.get('subcategory', '')
+    )
+
+    if not llm_result.is_valid:
+        await message.answer(get_rejection_message(llm_result))
+        return
+
+    await state.update_data(link_url=url)
     await message.answer(f"✅ <b>Ссылка добавлена:</b> <a href=\"{url}\">{link_title}</a>")
 
     await show_preview(message, state)
