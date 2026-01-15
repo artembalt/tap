@@ -842,8 +842,8 @@ async def show_preview(message: Message, state: FSMContext):
 
 {description[:200]}{'...' if len(description) > 200 else ''}
 
-💰 {data.get('price', 'Не указана')}
-📸 {len(data.get('photos', []))} фото{link_block}
+💰 {data.get('price', 'Не указана')}{link_block}
+📸 {len(data.get('photos', []))} фото
 
 <b>Опубликовать?</b>"""
 
