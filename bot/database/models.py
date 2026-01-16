@@ -177,9 +177,9 @@ class Ad(Base):
     published_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
     
-    # Внешняя ссылка (опционально)
-    link_title = Column(String(100), nullable=True)  # "Геопозиция", "Мой Авито"
-    link_url = Column(String(500), nullable=True)    # https://...
+    # Внешние ссылки (до 4 штук)
+    # Формат: [{"title": "Название", "url": "https://..."}, ...]
+    links = Column(JSONB, default=[])
 
     # Платные услуги
     is_premium = Column(Boolean, default=False)
