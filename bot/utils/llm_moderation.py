@@ -100,6 +100,51 @@ class ClaudeModerator:
         self._circuit_open_until = 0.0
         self._last_error_logged = 0.0
 
+    def _is_circuit_open(self) -> bool:
+        """Проверить, открыт ли circuit breaker"""
+        if self._circuit_open_until > 0:
+            if time.time() < self._circuit_open_until:
+                return True
+            # Таймаут истёк, пробуем снова
+            self._circuit_open_until = 0.0
+            self._error_count = 0
+            logger.info("[LLM] Circuit breaker закрыт, возобновляем работу")
+        return False
+
+    def _record_success(self):
+        """Записать успешный запрос"""
+        if self._error_count > 0:
+            logger.info(f"[LLM] API восстановлен после {self._error_count} ошибок")
+        self._error_count = 0
+        self._circuit_open_until = 0.0
+
+    def _record_error(self, error: Exception):
+        """Записать ошибку и возможно открыть circuit breaker"""
+        self._error_count += 1
+        current_time = time.time()
+
+        # Определяем тип ошибки
+        is_auth_error = "403" in str(error) or "401" in str(error)
+        is_rate_limit = "429" in str(error)
+
+        # Логируем первую ошибку как ERROR, последующие реже
+        if self._error_count == 1 or (current_time - self._last_error_logged) > 60:
+            if is_auth_error:
+                logger.error(f"[LLM] Ошибка авторизации API (403/401): {error}")
+            elif is_rate_limit:
+                logger.warning(f"[LLM] Rate limit API (429): {error}")
+            else:
+                logger.error(f"[LLM] Ошибка модерации: {error}")
+            self._last_error_logged = current_time
+
+        # Открываем circuit breaker после N ошибок
+        if self._error_count >= CIRCUIT_BREAKER_THRESHOLD:
+            self._circuit_open_until = current_time + CIRCUIT_BREAKER_TIMEOUT
+            logger.warning(
+                f"[LLM] Circuit breaker ОТКРЫТ на {CIRCUIT_BREAKER_TIMEOUT}с "
+                f"после {self._error_count} ошибок. LLM-модерация временно отключена."
+            )
+
     async def moderate(
         self,
         text: str,
@@ -128,6 +173,15 @@ class ClaudeModerator:
                 reason="LLM-модерация отключена (нет API ключа)"
             )
 
+        # Circuit breaker check
+        if self._is_circuit_open():
+            return LLMModerationResult(
+                is_safe=True,
+                category=ModerationCategory.SAFE,
+                confidence=0.0,
+                reason="LLM-модерация временно отключена (API недоступен)"
+            )
+
         if not text or len(text.strip()) < 3:
             return LLMModerationResult(
                 is_safe=True,
@@ -138,9 +192,10 @@ class ClaudeModerator:
 
         try:
             result = await self._call_claude(text, ad_category, ad_subcategory, content_type)
+            self._record_success()
             return result
         except Exception as e:
-            logger.error(f"[LLM] Ошибка модерации: {e}")
+            self._record_error(e)
             # При ошибке пропускаем (fail-open) — rule-based уже проверил
             return LLMModerationResult(
                 is_safe=True,
