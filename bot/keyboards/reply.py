@@ -11,6 +11,7 @@ def get_main_reply_keyboard() -> ReplyKeyboardMarkup:
         "🔍 Поиск",
         "📋 Мои объявления",
         "⭐ Избранное",
+        "💰 Баланс",
         "👤 Профиль"
     ]
 

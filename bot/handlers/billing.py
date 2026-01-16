@@ -48,6 +48,12 @@ class PromocodeStates(StatesGroup):
 # КОМАНДЫ
 # =============================================================================
 
+@router.message(F.text == "💰 Баланс")
+async def btn_balance(message: Message):
+    """Кнопка Баланс из reply клавиатуры"""
+    await cmd_balance(message)
+
+
 @router.message(Command("balance"))
 async def cmd_balance(message: Message):
     """Команда /balance — показать баланс"""
