@@ -1,14 +1,14 @@
 # bot/database/models.py
 """SQLAlchemy модели для базы данных"""
 
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List
 from enum import Enum
 import uuid
 
 from sqlalchemy import (
-    Column, String, Integer, Float, Boolean, DateTime, Text, 
-    ForeignKey, Index, JSON, ARRAY, UUID, BigInteger, Table
+    Column, String, Integer, Float, Boolean, DateTime, Text,
+    ForeignKey, Index, JSON, ARRAY, UUID, BigInteger, Table, Date
 )
 from sqlalchemy.orm import declarative_base, relationship
 from sqlalchemy.dialects.postgresql import JSONB
@@ -16,13 +16,22 @@ from sqlalchemy.sql import func
 
 Base = declarative_base()
 
-# Enum классы
+# =============================================================================
+# ENUM КЛАССЫ
+# =============================================================================
+
 class UserRole(str, Enum):
     USER = "user"
     VERIFIED = "verified"
     BUSINESS = "business"
     MODERATOR = "moderator"
     ADMIN = "admin"
+
+class AccountType(str, Enum):
+    """Тип аккаунта (подписки)"""
+    FREE = "free"
+    PRO = "pro"
+    BUSINESS = "business"
 
 class AdStatus(str, Enum):
     DRAFT = "draft"
@@ -44,6 +53,22 @@ class PaymentStatus(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
     REFUNDED = "refunded"
+
+class TransactionType(str, Enum):
+    """Тип транзакции"""
+    DEPOSIT = "deposit"          # Пополнение баланса
+    PURCHASE = "purchase"        # Покупка услуги
+    REFUND = "refund"            # Возврат
+    BONUS = "bonus"              # Бонусное начисление
+    SUBSCRIPTION = "subscription" # Оплата подписки
+
+class PromocodeType(str, Enum):
+    """Тип промокода"""
+    FIXED_RUB = "fixed_rub"      # Фиксированная сумма в рублях
+    PERCENT = "percent"          # Процент скидки
+    BONUS_RUB = "bonus_rub"      # Бонус на баланс в рублях
+    BONUS_STARS = "bonus_stars"  # Бонус на баланс в Stars
+    FREE_SERVICE = "free_service" # Бесплатная услуга
 
 class ReportReason(str, Enum):
     SPAM = "spam"
@@ -99,11 +124,22 @@ class User(Base):
     reviews_count = Column(Integer, default=0)
     profile_views = Column(Integer, default=0)  # Просмотры профиля
     
-    # Подписки и платежи
+    # Подписки и платежи (старые поля оставлены для совместимости)
     is_premium = Column(Boolean, default=False)
     premium_until = Column(DateTime, nullable=True)
-    balance = Column(Float, default=0.0)
-    total_spent = Column(Float, default=0.0)
+    balance = Column(Float, default=0.0)  # Deprecated: используйте balance_rub
+    total_spent = Column(Float, default=0.0)  # Deprecated: используйте total_spent_rub
+
+    # Новая система балансов
+    balance_rub = Column(Float, default=0.0)       # Баланс в рублях
+    balance_stars = Column(Integer, default=0)     # Баланс в Telegram Stars
+    total_spent_rub = Column(Float, default=0.0)   # Всего потрачено в рублях
+    total_spent_stars = Column(Integer, default=0) # Всего потрачено в Stars
+
+    # Тип аккаунта / Подписка
+    account_type = Column(String(20), default=AccountType.FREE.value)  # free, pro, business
+    account_until = Column(DateTime, nullable=True)  # До какого числа активна подписка
+    extra_ads_limit = Column(Integer, default=0)     # Докупленные объявления
     
     # Модерация
     is_banned = Column(Boolean, default=False)
@@ -120,10 +156,12 @@ class User(Base):
     ads = relationship("Ad", back_populates="user", cascade="all, delete-orphan")
     favorites = relationship("Ad", secondary=ad_favorites, back_populates="favorited_by")
     payments = relationship("Payment", back_populates="user")
+    transactions = relationship("Transaction", back_populates="user")
     reports_sent = relationship("Report", foreign_keys="Report.reporter_id", back_populates="reporter")
     reviews_given = relationship("Review", foreign_keys="Review.reviewer_id", back_populates="reviewer")
     reviews_received = relationship("Review", foreign_keys="Review.reviewed_user_id", back_populates="reviewed_user")
-    
+    promocode_usages = relationship("PromocodeUsage", back_populates="user")
+
     __table_args__ = (
         Index('idx_user_role', 'role'),
         Index('idx_user_created', 'created_at'),
@@ -132,6 +170,7 @@ class User(Base):
         Index('idx_user_banned', 'is_banned'),
         Index('idx_user_premium', 'is_premium'),
         Index('idx_user_last_activity', 'last_activity'),
+        Index('idx_user_account_type', 'account_type'),
     )
 
 class Ad(Base):
@@ -212,38 +251,54 @@ class Ad(Base):
     )
 
 class Payment(Base):
+    """Платежи (пополнение баланса)"""
     __tablename__ = 'payments'
-    
+
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
-    
+
     # Информация о платеже
     amount = Column(Float, nullable=False)
-    currency = Column(String(10), default='RUB')
+    currency = Column(String(10), default='RUB')  # 'RUB' или 'XTR' (Stars)
     status = Column(String(20), default=PaymentStatus.PENDING.value)
-    
-    # Детали платежа
-    service_type = Column(String(50), nullable=False)  # Тип услуги из PAID_SERVICES
+
+    # Тип платежа
+    payment_type = Column(String(20), default='deposit')  # 'deposit', 'service', 'subscription'
+
+    # Детали платежа (опционально, для покупки услуги напрямую)
+    service_type = Column(String(50), nullable=True)  # Код услуги из PAID_SERVICES
     service_details = Column(JSONB, default={})  # Дополнительные параметры
     ad_id = Column(UUID(as_uuid=True), ForeignKey('ads.id'), nullable=True)
-    
+
     # Платежная система
-    payment_system = Column(String(50), default='yoomoney')
+    # Варианты: 'yookassa', 'robokassa', 'tinkoff', 'telegram_stars', 'manual', 'bonus'
+    payment_system = Column(String(50), default='yookassa')
     payment_id = Column(String(255), nullable=True)  # ID в платежной системе
     payment_url = Column(Text, nullable=True)  # Ссылка на оплату
-    
+
+    # Для Telegram Stars
+    telegram_payment_charge_id = Column(String(255), nullable=True)
+    provider_payment_charge_id = Column(String(255), nullable=True)
+
+    # Промокод (если применён)
+    promocode_id = Column(Integer, ForeignKey('promocodes.id'), nullable=True)
+    discount_amount = Column(Float, default=0.0)  # Сумма скидки
+
     # Временные метки
     created_at = Column(DateTime, default=datetime.utcnow)
     paid_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
-    
+
     # Отношения
     user = relationship("User", back_populates="payments")
-    
+    promocode = relationship("Promocode", back_populates="payments")
+    transaction = relationship("Transaction", back_populates="payment", uselist=False)
+
     __table_args__ = (
         Index('idx_payment_user_status', 'user_id', 'status'),
         Index('idx_payment_created', 'created_at'),
         Index('idx_payment_expires', 'expires_at'),
+        Index('idx_payment_system', 'payment_system'),
     )
 
 class Report(Base):
@@ -329,10 +384,169 @@ class SpamWord(Base):
 
 class SystemSettings(Base):
     __tablename__ = 'system_settings'
-    
+
     key = Column(String(100), primary_key=True)
     value = Column(JSONB, nullable=False)
     description = Column(Text, nullable=True)
-    
+
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     updated_by = Column(BigInteger, nullable=True)
+
+
+# =============================================================================
+# НОВЫЕ МОДЕЛИ ДЛЯ БИЛЛИНГА
+# =============================================================================
+
+class Transaction(Base):
+    """История всех операций с балансом"""
+    __tablename__ = 'transactions'
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
+
+    # Тип и валюта
+    type = Column(String(20), nullable=False)  # deposit, purchase, refund, bonus, subscription
+    currency = Column(String(10), nullable=False)  # 'RUB' или 'XTR'
+    amount = Column(Float, nullable=False)  # Сумма (всегда положительная)
+
+    # Балансы ПОСЛЕ операции (для аудита и сверки)
+    balance_rub_after = Column(Float, nullable=False)
+    balance_stars_after = Column(Integer, nullable=False)
+
+    # Связи
+    payment_id = Column(UUID(as_uuid=True), ForeignKey('payments.id'), nullable=True)
+    ad_id = Column(UUID(as_uuid=True), ForeignKey('ads.id'), nullable=True)
+
+    # Детали
+    service_code = Column(String(50), nullable=True)  # Код услуги (если purchase)
+    description = Column(String(255), nullable=False)  # "Пополнение баланса", "Закрепление в канале 24ч"
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    # Отношения
+    user = relationship("User", back_populates="transactions")
+    payment = relationship("Payment", back_populates="transaction")
+
+    __table_args__ = (
+        Index('idx_transaction_user', 'user_id'),
+        Index('idx_transaction_type', 'type'),
+        Index('idx_transaction_created', 'created_at'),
+        Index('idx_transaction_user_created', 'user_id', 'created_at'),
+    )
+
+
+class ExchangeRate(Base):
+    """Курсы валют (для расчёта стоимости Stars)"""
+    __tablename__ = 'exchange_rates'
+
+    id = Column(Integer, primary_key=True)
+    rate_date = Column(Date, unique=True, nullable=False, index=True)
+
+    # Курсы
+    usd_rub = Column(Float, nullable=False)   # Курс ЦБ РФ USD/RUB
+    star_rub = Column(Float, nullable=False)  # Рассчитанный курс Star/RUB
+
+    # Формула: star_rub = usd_rub * 0.013 * 0.9, минимум 1.0
+
+    source = Column(String(50), default='cbr')  # Источник курса: 'cbr', 'manual'
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('idx_exchange_rate_date', 'rate_date'),
+    )
+
+
+class Promocode(Base):
+    """Промокоды"""
+    __tablename__ = 'promocodes'
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), unique=True, nullable=False, index=True)  # "LAUNCH2026"
+
+    # Тип и значение
+    type = Column(String(20), nullable=False)  # fixed_rub, percent, bonus_rub, bonus_stars, free_service
+    value = Column(Float, nullable=False)  # 100 (рублей), 20 (процентов), 50 (звёзд)
+    service_code = Column(String(50), nullable=True)  # Для free_service - код услуги
+
+    # Ограничения
+    max_uses = Column(Integer, nullable=True)         # Всего использований (None = безлимит)
+    max_uses_per_user = Column(Integer, default=1)    # На одного пользователя
+    min_amount = Column(Float, nullable=True)         # Минимальная сумма заказа
+
+    # Для каких услуг (None = для всех)
+    allowed_services = Column(ARRAY(String), nullable=True)  # ['pin_channel_24h', 'boost_up']
+
+    # Срок действия
+    valid_from = Column(DateTime, nullable=True)
+    valid_until = Column(DateTime, nullable=True)
+
+    # Статистика
+    uses_count = Column(Integer, default=0)
+    total_discount_given = Column(Float, default=0.0)  # Общая сумма скидок
+
+    is_active = Column(Boolean, default=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(BigInteger, nullable=True)
+
+    # Отношения
+    payments = relationship("Payment", back_populates="promocode")
+    usages = relationship("PromocodeUsage", back_populates="promocode")
+
+    __table_args__ = (
+        Index('idx_promocode_code', 'code'),
+        Index('idx_promocode_active', 'is_active'),
+    )
+
+
+class PromocodeUsage(Base):
+    """История использования промокодов"""
+    __tablename__ = 'promocode_usages'
+
+    id = Column(Integer, primary_key=True)
+    promocode_id = Column(Integer, ForeignKey('promocodes.id'), nullable=False)
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
+
+    discount_amount = Column(Float, nullable=False)  # Сколько сэкономил
+    payment_id = Column(UUID(as_uuid=True), ForeignKey('payments.id'), nullable=True)
+
+    used_at = Column(DateTime, default=datetime.utcnow)
+
+    # Отношения
+    promocode = relationship("Promocode", back_populates="usages")
+    user = relationship("User", back_populates="promocode_usages")
+
+    __table_args__ = (
+        Index('idx_promocode_usage_user', 'user_id'),
+        Index('idx_promocode_usage_promo', 'promocode_id'),
+    )
+
+
+class UserServicePurchase(Base):
+    """Купленные пользователем услуги (активные)"""
+    __tablename__ = 'user_service_purchases'
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(BigInteger, ForeignKey('users.telegram_id'), nullable=False)
+    ad_id = Column(UUID(as_uuid=True), ForeignKey('ads.id'), nullable=True)
+
+    service_code = Column(String(50), nullable=False)  # Код услуги
+    quantity = Column(Integer, default=1)  # Количество (для per_item услуг)
+
+    # Срок действия (для временных услуг)
+    activated_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)
+
+    is_active = Column(Boolean, default=True)
+
+    # Связь с транзакцией
+    transaction_id = Column(UUID(as_uuid=True), ForeignKey('transactions.id'), nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index('idx_user_service_user', 'user_id'),
+        Index('idx_user_service_ad', 'ad_id'),
+        Index('idx_user_service_active', 'is_active'),
+        Index('idx_user_service_expires', 'expires_at'),
+    )
