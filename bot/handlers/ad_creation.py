@@ -715,8 +715,8 @@ async def process_delivery(callback: CallbackQuery, state: FSMContext):
     
     delivery_name = DELIVERY_TYPES.get(delivery, delivery)
     await callback.message.answer(f"✅ <b>Доставка:</b> {delivery_name}")
-    
-    await ask_link_title(callback.message, state)
+
+    await ask_link_count(callback.message, state)
     await callback.answer()
 
 
@@ -951,10 +951,12 @@ async def show_preview(message: Message, state: FSMContext):
 
     description = data.get('description') or ''
 
-    # Формируем блок ссылки если есть
+    # Формируем блок ссылок если есть
     link_block = ""
-    if data.get('link_title') and data.get('link_url'):
-        link_block = f"\n🔗 <a href=\"{data.get('link_url')}\">{data.get('link_title')}</a>"
+    links = data.get('links', [])
+    if links:
+        link_lines = [f"🔗 <a href=\"{link['url']}\">{link['title']}</a>" for link in links]
+        link_block = "\n" + "\n".join(link_lines)
 
     text = f"""📢 <b>Превью</b>
 
@@ -1018,8 +1020,7 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
                 ad_type=data.get('deal_type'),
                 photos=data.get('photos', []),
                 video=data.get('video'),
-                link_title=data.get('link_title'),
-                link_url=data.get('link_url'),
+                links=data.get('links', []),
                 status=AdStatus.ACTIVE.value,
                 created_at=datetime.utcnow(),
                 channel_message_ids={},
@@ -1158,11 +1159,13 @@ async def publish_to_channel(bot, bot_info, ad, data) -> dict:
         hashtags.append(city_hashtag)
     
     hashtags_text = " ".join(hashtags) if hashtags else ""
-    
-    # ===== Формируем блок внешней ссылки =====
+
+    # ===== Формируем блок внешних ссылок =====
     external_link = ""
-    if data.get('link_title') and data.get('link_url'):
-        external_link = f"\n🔗 <a href=\"{data.get('link_url')}\">{data.get('link_title')}</a>"
+    links = data.get('links', [])
+    if links:
+        link_lines = [f"🔗 <a href=\"{link['url']}\">{link['title']}</a>" for link in links]
+        external_link = "\n" + "\n".join(link_lines)
 
     # ===== Текст объявления с ссылками =====
     text = f"""<b>{data.get('title', '')}</b>
