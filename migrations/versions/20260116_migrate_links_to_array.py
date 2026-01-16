@@ -1,7 +1,7 @@
 """Migrate link_title/link_url to links JSONB array
 
 Revision ID: 20260116_links
-Revises: 20260114_link
+Revises: 9fdb05a48fe3
 Create Date: 2026-01-16
 """
 from alembic import op
@@ -11,7 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 # revision identifiers
 revision = '20260116_links'
-down_revision = '20260114_link'
+down_revision = '9fdb05a48fe3'
 branch_labels = None
 depends_on = None
 

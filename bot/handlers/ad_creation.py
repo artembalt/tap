@@ -65,8 +65,9 @@ class AdCreation(StatesGroup):
     video = State()
     price = State()
     delivery = State()
-    link_title = State()   # Название ссылки (опционально)
-    link_url = State()     # URL ссылки
+    link_count = State()   # Выбор количества ссылок (1-4)
+    link_title = State()   # Название текущей ссылки
+    link_url = State()     # URL текущей ссылки
     confirm = State()
 
 
@@ -719,36 +720,82 @@ async def process_delivery(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ========== ВНЕШНЯЯ ССЫЛКА ==========
-async def ask_link_title(message: Message, state: FSMContext):
-    logger.info("[LINK] ask_link_title")
-    await state.set_state(AdCreation.link_title)
+# ========== ВНЕШНИЕ ССЫЛКИ ==========
+async def ask_link_count(message: Message, state: FSMContext):
+    """Шаг 14: Спрашиваем сколько ссылок добавить"""
+    logger.info("[LINK] ask_link_count")
+    await state.set_state(AdCreation.link_count)
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="1", callback_data="link_count_1"),
+            InlineKeyboardButton(text="2", callback_data="link_count_2"),
+            InlineKeyboardButton(text="3", callback_data="link_count_3"),
+            InlineKeyboardButton(text="4", callback_data="link_count_4"),
+        ],
         [InlineKeyboardButton(text="⏭ Пропустить", callback_data="link_skip")]
     ])
 
     await message.answer(
-        "🔗 <b>Шаг 13: Внешняя ссылка</b> (опционально)\n\n"
-        "Введите <b>название ссылки</b>, например:\n"
-        "• Геопозиция\n"
-        "• Моё объявление на Авито\n"
-        "• Мой сайт\n\n"
-        "Или нажмите «Пропустить»",
+        "🔗 <b>Шаг 14: Внешние ссылки</b> (опционально)\n\n"
+        "Сколько ссылок вы хотите добавить к объявлению?\n\n"
+        "Ссылки могут вести на:\n"
+        "• Геопозицию\n"
+        "• Ваш сайт или Авито\n"
+        "• Telegram-канал\n"
+        "• Любой другой ресурс",
         reply_markup=keyboard
     )
 
 
+@router.callback_query(F.data.startswith("link_count_"))
+async def process_link_count(callback: CallbackQuery, state: FSMContext):
+    """Обработка выбора количества ссылок"""
+    count = int(callback.data.split("_")[-1])
+    logger.info(f"[LINK] count selected: {count}")
+
+    await safe_clear_keyboard(callback)
+    await state.update_data(
+        link_count=count,
+        current_link_index=0,
+        links=[]
+    )
+
+    await ask_link_title(callback.message, state)
+    await callback.answer()
+
+
 @router.callback_query(F.data == "link_skip")
 async def skip_link(callback: CallbackQuery, state: FSMContext):
+    """Пропуск добавления ссылок"""
     logger.info("[LINK] skip")
     await safe_clear_keyboard(callback)
+    await state.update_data(links=[])
     await show_preview(callback.message, state)
     await callback.answer()
 
 
+async def ask_link_title(message: Message, state: FSMContext):
+    """Запрос названия ссылки"""
+    data = await state.get_data()
+    current_index = data.get('current_link_index', 0)
+    total_count = data.get('link_count', 1)
+
+    logger.info(f"[LINK] ask_link_title ({current_index + 1}/{total_count})")
+    await state.set_state(AdCreation.link_title)
+
+    await message.answer(
+        f"🔗 <b>Ссылка {current_index + 1} из {total_count}</b>\n\n"
+        "Введите <b>название ссылки</b>, например:\n"
+        "• Геопозиция\n"
+        "• Моё объявление на Авито\n"
+        "• Мой сайт"
+    )
+
+
 @router.message(AdCreation.link_title)
 async def process_link_title(message: Message, state: FSMContext):
+    """Обработка названия ссылки"""
     logger.info(f"[LINK] title: {message.text[:30] if message.text else 'None'}")
 
     if not message.text:
@@ -778,17 +825,23 @@ async def process_link_title(message: Message, state: FSMContext):
         await message.answer("❌ Название содержит недопустимые слова. Введите другое.")
         return
 
-    await state.update_data(link_title=link_title)
+    # Сохраняем временно название текущей ссылки
+    await state.update_data(current_link_title=link_title)
     await message.answer(f"✅ <b>Название:</b> {link_title}")
     await ask_link_url(message, state)
 
 
 async def ask_link_url(message: Message, state: FSMContext):
-    logger.info("[LINK] ask_link_url")
+    """Запрос URL ссылки"""
+    data = await state.get_data()
+    current_index = data.get('current_link_index', 0)
+    total_count = data.get('link_count', 1)
+
+    logger.info(f"[LINK] ask_link_url ({current_index + 1}/{total_count})")
     await state.set_state(AdCreation.link_url)
 
     await message.answer(
-        "🔗 Теперь введите <b>ссылку</b> (URL):\n\n"
+        f"🔗 Теперь введите <b>ссылку</b> (URL) для «{data.get('current_link_title', 'Ссылка')}»:\n\n"
         "Например:\n"
         "• https://yandex.ru/maps/...\n"
         "• avito.ru/...\n"
@@ -799,6 +852,7 @@ async def ask_link_url(message: Message, state: FSMContext):
 
 @router.message(AdCreation.link_url)
 async def process_link_url(message: Message, state: FSMContext):
+    """Обработка URL ссылки"""
     logger.info(f"[LINK] url: {message.text[:50] if message.text else 'None'}")
 
     if not message.text:
@@ -849,7 +903,7 @@ async def process_link_url(message: Message, state: FSMContext):
 
     # Проверка ссылки на запрещённый контент через LLM
     data = await state.get_data()
-    link_title = data.get('link_title', 'Ссылка')
+    link_title = data.get('current_link_title', 'Ссылка')
 
     llm_result = await validate_content_with_llm(
         f"Ссылка с названием '{link_title}' ведёт на: {url}",
@@ -862,10 +916,27 @@ async def process_link_url(message: Message, state: FSMContext):
         await message.answer(get_rejection_message(llm_result))
         return
 
-    await state.update_data(link_url=url)
+    # Добавляем ссылку в массив
+    links = data.get('links', [])
+    links.append({'title': link_title, 'url': url})
+
+    current_index = data.get('current_link_index', 0) + 1
+    total_count = data.get('link_count', 1)
+
+    await state.update_data(
+        links=links,
+        current_link_index=current_index,
+        current_link_title=None  # очищаем временное название
+    )
+
     await message.answer(f"✅ <b>Ссылка добавлена:</b> <a href=\"{url}\">{link_title}</a>")
 
-    await show_preview(message, state)
+    # Если ещё не все ссылки введены - продолжаем
+    if current_index < total_count:
+        await ask_link_title(message, state)
+    else:
+        # Все ссылки введены - переходим к превью
+        await show_preview(message, state)
 
 
 # ========== ПРЕВЬЮ ==========
