@@ -12,10 +12,11 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramNetworkError, TelegramAPIError
 
 from bot.database.connection import get_db_session
-from bot.database.models import Ad, AdStatus
+from bot.database.models import Ad, AdStatus, User
 from bot.utils.content_filter import (
     validate_content, validate_content_with_llm, get_rejection_message
 )
+from bot.utils.limits import can_create_ad, get_user_limits, get_ad_duration_days
 from shared.regions_config import (
     REGIONS, CITIES, CATEGORIES, SUBCATEGORIES, DEAL_TYPES,
     CONDITION_TYPES, DELIVERY_TYPES, CATEGORIES_WITH_DELIVERY,
@@ -76,6 +77,21 @@ class AdCreation(StatesGroup):
 async def start_creation_callback(callback: CallbackQuery, state: FSMContext):
     logger.info(f"[NEW_AD] callback new_ad, user={callback.from_user.id}")
     await callback.answer()
+
+    # Проверка лимита объявлений
+    async with get_db_session() as session:
+        user = await session.get(User, callback.from_user.id)
+        if user:
+            can_create, reason = await can_create_ad(user, session)
+            if not can_create:
+                from bot.keyboards.billing import get_billing_menu_keyboard
+                await callback.message.answer(
+                    f"❌ {reason}\n\n"
+                    "Вы можете оформить подписку для увеличения лимита:",
+                    reply_markup=get_billing_menu_keyboard()
+                )
+                return
+
     await state.clear()
     await ask_region(callback.message, state)
 
@@ -83,6 +99,21 @@ async def start_creation_callback(callback: CallbackQuery, state: FSMContext):
 @router.message(F.text.in_(["Создать объявление", "📝 Подать объявление", "/create", "/new_ad"]))
 async def start_creation(message: Message, state: FSMContext):
     logger.info(f"[NEW_AD] message, user={message.from_user.id}")
+
+    # Проверка лимита объявлений
+    async with get_db_session() as session:
+        user = await session.get(User, message.from_user.id)
+        if user:
+            can_create, reason = await can_create_ad(user, session)
+            if not can_create:
+                from bot.keyboards.billing import get_billing_menu_keyboard
+                await message.answer(
+                    f"❌ {reason}\n\n"
+                    "Вы можете оформить подписку для увеличения лимита:",
+                    reply_markup=get_billing_menu_keyboard()
+                )
+                return
+
     await state.clear()
     await ask_region(message, state)
 

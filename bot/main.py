@@ -22,9 +22,12 @@ sys.path.append(str(Path(__file__).parent.parent))
 from bot.config import settings
 from bot.database.connection import init_db
 from bot.handlers import start, ad_creation, ad_management, search, profile, admin, payment, comments, favorites
+from bot.handlers import billing as billing_handler
 from bot.middlewares.antiflood import AntiFloodMiddleware
 from bot.middlewares.auth import AuthMiddleware
 from bot.utils.commands import set_bot_commands
+from bot.database.connection import get_session
+from bot.services.exchange_rate import ExchangeRateService
 
 logging.basicConfig(
     level=logging.INFO,
