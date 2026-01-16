@@ -78,3 +78,7 @@ async def check_db_connection():
     except Exception as e:
         logger.error(f"Ошибка подключения к БД: {e}")
         return False
+
+
+# Алиас для удобства
+get_session = get_db_session

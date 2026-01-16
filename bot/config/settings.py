@@ -1,4 +1,4 @@
-# bot/config.py
+# bot/config/settings.py
 """Конфигурация бота и переменные окружения"""
 
 import os
@@ -7,7 +7,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 # Загрузка переменных окружения
-env_path = Path(__file__).parent.parent / '.env'
+# Path: bot/config/settings.py -> bot/config -> bot -> project_root -> .env
+env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(env_path)
 
 class Settings:
