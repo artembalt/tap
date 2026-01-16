@@ -7,11 +7,17 @@ LLM-модерация объявлений с использованием Clau
 import logging
 import json
 import httpx
+import time
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+
+# Circuit breaker настройки
+CIRCUIT_BREAKER_THRESHOLD = 3  # Количество ошибок для срабатывания
+CIRCUIT_BREAKER_TIMEOUT = 300  # Секунд до повторной попытки (5 минут)
 
 
 class ModerationCategory(str, Enum):
@@ -88,6 +94,11 @@ class ClaudeModerator:
         self.model = model
         self.threshold = threshold
         self.api_url = "https://api.anthropic.com/v1/messages"
+
+        # Circuit breaker state
+        self._error_count = 0
+        self._circuit_open_until = 0.0
+        self._last_error_logged = 0.0
 
     async def moderate(
         self,
