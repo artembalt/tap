@@ -5,6 +5,7 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
+from datetime import timedelta
 from aiohttp import web, ClientTimeout
 
 from aiogram import Bot, Dispatcher, BaseMiddleware
@@ -83,6 +84,51 @@ async def keepalive_task(bot: Bot):
             pass  # Игнорируем ошибки - главное держать соединение активным
 
 
+async def exchange_rate_updater():
+    """
+    Фоновая задача для обновления курса валют.
+    Обновляет курс Stars каждый день в 4:00 МСК (1:00 UTC).
+    """
+    from datetime import datetime, time
+    import pytz
+
+    msk = pytz.timezone('Europe/Moscow')
+
+    while True:
+        try:
+            now = datetime.now(msk)
+            # Следующее обновление в 4:00 МСК
+            target_time = time(4, 0)
+            target_dt = datetime.combine(now.date(), target_time, tzinfo=msk)
+
+            if now.time() >= target_time:
+                # Если уже прошло 4:00 сегодня - ждём до завтра
+                target_dt = datetime.combine(
+                    now.date() + timedelta(days=1),
+                    target_time,
+                    tzinfo=msk
+                )
+
+            # Сколько секунд до следующего обновления
+            wait_seconds = (target_dt - now).total_seconds()
+            logger.info(f"Следующее обновление курса через {wait_seconds/3600:.1f} часов")
+
+            await asyncio.sleep(wait_seconds)
+
+            # Обновляем курс
+            async with get_session() as session:
+                service = ExchangeRateService(session)
+                success, message = await service.update_rate()
+                logger.info(f"Обновление курса: {message}")
+                if success:
+                    await session.commit()
+
+        except Exception as e:
+            logger.error(f"Ошибка в exchange_rate_updater: {e}")
+            # При ошибке ждём 1 час и пробуем снова
+            await asyncio.sleep(3600)
+
+
 async def on_startup(bot: Bot):
     logger.info("=" * 60)
     logger.info("ЗАПУСК БОТА")
@@ -100,12 +146,24 @@ async def on_startup(bot: Bot):
     await bot.set_webhook(
         url=WEBHOOK_URL,
         drop_pending_updates=True,
-        allowed_updates=["message", "callback_query"]
+        allowed_updates=["message", "callback_query", "pre_checkout_query"]
     )
     logger.info(f"Webhook: {WEBHOOK_URL}")
 
-    # Запускаем фоновую задачу для поддержания соединения
+    # Запускаем фоновые задачи
     asyncio.create_task(keepalive_task(bot))
+    asyncio.create_task(exchange_rate_updater())
+
+    # Обновляем курс при старте если его нет
+    try:
+        async with get_session() as session:
+            service = ExchangeRateService(session)
+            success, message = await service.update_rate()
+            logger.info(f"Инициализация курса: {message}")
+            if success:
+                await session.commit()
+    except Exception as e:
+        logger.warning(f"Не удалось обновить курс при старте: {e}")
 
 
 async def on_shutdown(bot: Bot):
@@ -166,6 +224,7 @@ async def main():
     dp.include_router(search.router)
     dp.include_router(profile.router)
     dp.include_router(payment.router)
+    dp.include_router(billing_handler.router)  # Биллинг (баланс, история)
     dp.include_router(admin.router)
     dp.include_router(comments.router)  # Мониторинг комментариев
     dp.include_router(favorites.router)  # Избранное
