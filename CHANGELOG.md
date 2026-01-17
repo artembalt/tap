@@ -6,6 +6,11 @@
 
 ## 2026-01-17
 
+### Исправлено
+- **Telegram Stars:** добавлен отсутствующий параметр `provider_token=""` в `send_invoice()` (`bot/handlers/payment.py:74`)
+  - Ошибка: "missing 1 required positional argument: 'provider_token'"
+  - Для Telegram Stars (XTR) требуется пустой provider_token
+
 ### Добавлено
 - **Система биллинга и платных услуг** (масштабное обновление)
 

@@ -71,6 +71,7 @@ async def deposit_stars_amount(callback: CallbackQuery, bot: Bot):
             payload=f"deposit_stars_{amount}",
             currency="XTR",  # Telegram Stars
             prices=prices,
+            provider_token="",  # Пустой для Telegram Stars
         )
         await callback.message.delete()
     except Exception as e:
