@@ -40,6 +40,12 @@ class Settings:
     YOOMONEY_TOKEN: str = os.getenv("YOOMONEY_TOKEN", "")
     YOOMONEY_WALLET: str = os.getenv("YOOMONEY_WALLET", "")
     YOOMONEY_SECRET: str = os.getenv("YOOMONEY_SECRET", "")
+
+    # Robokassa
+    ROBOKASSA_MERCHANT_LOGIN: str = os.getenv("ROBOKASSA_MERCHANT_LOGIN", "")
+    ROBOKASSA_PASSWORD1: str = os.getenv("ROBOKASSA_PASSWORD1", "")
+    ROBOKASSA_PASSWORD2: str = os.getenv("ROBOKASSA_PASSWORD2", "")
+    ROBOKASSA_TEST_MODE: bool = os.getenv("ROBOKASSA_TEST_MODE", "False").lower() == "true"
     
     # Администраторы
     ADMIN_IDS: List[int] = [
