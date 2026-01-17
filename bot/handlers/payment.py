@@ -33,8 +33,12 @@ from bot.keyboards.billing import (
     get_deposit_amount_keyboard,
     get_currency_choice_keyboard,
 )
+from bot.services.robokassa import generate_payment_url
 
 logger = logging.getLogger(__name__)
+
+# Счётчик для генерации уникальных InvId
+import time
 
 router = Router(name='payment')
 

@@ -29,6 +29,11 @@ from bot.middlewares.auth import AuthMiddleware
 from bot.utils.commands import set_bot_commands
 from bot.database.connection import get_session
 from bot.services.exchange_rate import ExchangeRateService
+from bot.services.robokassa import (
+    verify_result_signature, parse_amount, parse_inv_id
+)
+from bot.services.billing import BillingService
+from bot.database.models import User, Payment, PaymentStatus
 
 logging.basicConfig(
     level=logging.INFO,
@@ -171,7 +176,241 @@ async def on_shutdown(bot: Bot):
     await bot.delete_webhook()
 
 
+# =============================================================================
+# ROBOKASSA WEBHOOK HANDLERS
+# =============================================================================
+
+# Глобальная переменная для бота (нужна для отправки уведомлений)
+_bot: Bot = None
+
+
+async def robokassa_result_handler(request: web.Request) -> web.Response:
+    """
+    Result URL — уведомление об успешной оплате от Robokassa.
+    Вызывается сервером Robokassa после оплаты.
+    Должен вернуть OK{InvId} при успехе.
+    """
+    try:
+        # Robokassa шлёт POST
+        data = await request.post()
+
+        out_sum = data.get("OutSum", "")
+        inv_id = data.get("InvId", "")
+        signature = data.get("SignatureValue", "")
+        shp_user_id = data.get("Shp_user_id", "")
+
+        logger.info(
+            f"Robokassa Result: inv_id={inv_id}, out_sum={out_sum}, user_id={shp_user_id}"
+        )
+
+        # Проверяем подпись
+        if not verify_result_signature(out_sum, inv_id, signature, shp_user_id):
+            logger.error(f"Robokassa: неверная подпись для inv_id={inv_id}")
+            return web.Response(text="bad signature", status=400)
+
+        amount = parse_amount(out_sum)
+        payment_inv_id = parse_inv_id(inv_id)
+        user_id = int(shp_user_id) if shp_user_id else 0
+
+        if not user_id or not amount:
+            logger.error(f"Robokassa: некорректные данные inv_id={inv_id}")
+            return web.Response(text="bad data", status=400)
+
+        # Обрабатываем платёж
+        async with get_session() as session:
+            # Получаем платёж по inv_id
+            from sqlalchemy import select
+            result = await session.execute(
+                select(Payment).where(Payment.payment_id == str(payment_inv_id))
+            )
+            payment = result.scalar_one_or_none()
+
+            if not payment:
+                logger.error(f"Robokassa: платёж не найден inv_id={inv_id}")
+                return web.Response(text="payment not found", status=404)
+
+            if payment.status == PaymentStatus.SUCCESS.value:
+                # Уже обработан (дубликат уведомления)
+                logger.info(f"Robokassa: платёж уже обработан inv_id={inv_id}")
+                return web.Response(text=f"OK{inv_id}")
+
+            # Получаем пользователя
+            user = await session.get(User, user_id)
+            if not user:
+                logger.error(f"Robokassa: пользователь не найден user_id={user_id}")
+                return web.Response(text="user not found", status=404)
+
+            # Обновляем статус платежа
+            payment.status = PaymentStatus.SUCCESS.value
+            from datetime import datetime
+            payment.paid_at = datetime.utcnow()
+
+            # Пополняем баланс
+            billing = BillingService(session)
+            await billing.deposit(
+                user=user,
+                amount=amount,
+                currency="RUB",
+                payment=payment,
+                description=f"Пополнение через Robokassa +{amount:.0f} ₽"
+            )
+
+            await session.commit()
+
+            logger.info(
+                f"Robokassa: платёж успешен inv_id={inv_id}, "
+                f"user_id={user_id}, amount={amount}"
+            )
+
+            # Отправляем уведомление пользователю
+            if _bot:
+                try:
+                    await _bot.send_message(
+                        user_id,
+                        f"✅ <b>Платёж получен!</b>\n\n"
+                        f"Баланс пополнен на {amount:.0f} ₽\n\n"
+                        f"💰 Текущий баланс: {user.balance_rub:.0f} ₽"
+                    )
+                except Exception as e:
+                    logger.warning(f"Не удалось отправить уведомление: {e}")
+
+        return web.Response(text=f"OK{inv_id}")
+
+    except Exception as e:
+        logger.error(f"Robokassa Result error: {e}")
+        return web.Response(text="error", status=500)
+
+
+async def robokassa_success_handler(request: web.Request) -> web.Response:
+    """
+    Success URL — редирект пользователя после успешной оплаты.
+    Показываем страницу с благодарностью.
+    """
+    inv_id = request.query.get("InvId", "")
+    out_sum = request.query.get("OutSum", "")
+
+    logger.info(f"Robokassa Success: inv_id={inv_id}, out_sum={out_sum}")
+
+    # Возвращаем HTML страницу
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Оплата успешна</title>
+        <style>
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+                margin: 0;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            }}
+            .card {{
+                background: white;
+                padding: 40px;
+                border-radius: 16px;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                text-align: center;
+                max-width: 400px;
+            }}
+            .icon {{ font-size: 64px; margin-bottom: 20px; }}
+            h1 {{ color: #333; margin: 0 0 10px 0; }}
+            p {{ color: #666; margin: 10px 0; }}
+            .amount {{ font-size: 24px; font-weight: bold; color: #667eea; }}
+            .btn {{
+                display: inline-block;
+                margin-top: 20px;
+                padding: 12px 24px;
+                background: #667eea;
+                color: white;
+                text-decoration: none;
+                border-radius: 8px;
+                font-weight: 500;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <div class="icon">✅</div>
+            <h1>Оплата успешна!</h1>
+            <p class="amount">{out_sum} ₽</p>
+            <p>Баланс пополнен. Вернитесь в бот.</p>
+            <a href="https://t.me/proday_main_bot" class="btn">Открыть бот</a>
+        </div>
+    </body>
+    </html>
+    """
+    return web.Response(text=html, content_type="text/html")
+
+
+async def robokassa_fail_handler(request: web.Request) -> web.Response:
+    """
+    Fail URL — редирект при отмене/ошибке оплаты.
+    """
+    inv_id = request.query.get("InvId", "")
+
+    logger.info(f"Robokassa Fail: inv_id={inv_id}")
+
+    html = """
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Оплата отменена</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+                margin: 0;
+                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            }
+            .card {
+                background: white;
+                padding: 40px;
+                border-radius: 16px;
+                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                text-align: center;
+                max-width: 400px;
+            }
+            .icon { font-size: 64px; margin-bottom: 20px; }
+            h1 { color: #333; margin: 0 0 10px 0; }
+            p { color: #666; }
+            .btn {
+                display: inline-block;
+                margin-top: 20px;
+                padding: 12px 24px;
+                background: #f5576c;
+                color: white;
+                text-decoration: none;
+                border-radius: 8px;
+                font-weight: 500;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <div class="icon">❌</div>
+            <h1>Оплата отменена</h1>
+            <p>Платёж не был завершён.<br>Вы можете попробовать снова в боте.</p>
+            <a href="https://t.me/proday_main_bot" class="btn">Вернуться в бот</a>
+        </div>
+    </body>
+    </html>
+    """
+    return web.Response(text=html, content_type="text/html")
+
+
 async def main():
+    global _bot
+
     redis = Redis(
         host=settings.REDIS_HOST,
         port=settings.REDIS_PORT,
@@ -200,7 +439,10 @@ async def main():
         session=session,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
-    
+
+    # Сохраняем бота для Robokassa уведомлений
+    _bot = bot
+
     dp = Dispatcher(storage=storage)
 
     # Middleware
@@ -236,7 +478,12 @@ async def main():
     webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
     webhook_requests_handler.register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
-    
+
+    # Robokassa webhooks
+    app.router.add_post("/webhook/robokassa/result", robokassa_result_handler)
+    app.router.add_get("/webhook/robokassa/success", robokassa_success_handler)
+    app.router.add_get("/webhook/robokassa/fail", robokassa_fail_handler)
+
     logger.info(f"Сервер: {WEB_SERVER_HOST}:{WEB_SERVER_PORT}")
     runner = web.AppRunner(app)
     await runner.setup()
