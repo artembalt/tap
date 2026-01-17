@@ -31,6 +31,9 @@ def get_deposit_keyboard() -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="💳 Пополнить ₽ (скоро)", callback_data="deposit_rub"),
         ],
+        [
+            InlineKeyboardButton(text="📄 Оферта", callback_data="show_offer"),
+        ],
         [InlineKeyboardButton(text="« Назад", callback_data="billing_menu")],
     ])
 

@@ -16,7 +16,7 @@
 import logging
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -104,6 +104,55 @@ async def cmd_history(message: Message):
             "\n".join(lines),
             reply_markup=get_transactions_keyboard(has_more=len(transactions) >= 20)
         )
+
+
+@router.message(Command("offer"))
+async def cmd_offer(message: Message):
+    """Команда /offer — публичная оферта"""
+    # Отправляем PDF файл
+    pdf_path = "/home/telegram-ads-platform/uploads/oferta.pdf"
+
+    try:
+        document = FSInputFile(pdf_path, filename="Оферта_ProdayBot.pdf")
+        await message.answer_document(
+            document=document,
+            caption=(
+                "📄 <b>Публичная оферта</b>\n\n"
+                "Также доступна онлайн:\n"
+                "🔗 https://prodaybot.ru/offer"
+            )
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки оферты: {e}")
+        await message.answer(
+            "📄 <b>Публичная оферта</b>\n\n"
+            "🔗 https://prodaybot.ru/offer"
+        )
+
+
+@router.callback_query(F.data == "show_offer")
+async def show_offer(callback: CallbackQuery):
+    """Показать оферту"""
+    pdf_path = "/home/telegram-ads-platform/uploads/oferta.pdf"
+
+    try:
+        document = FSInputFile(pdf_path, filename="Оферта_ProdayBot.pdf")
+        await callback.message.answer_document(
+            document=document,
+            caption=(
+                "📄 <b>Публичная оферта</b>\n\n"
+                "Также доступна онлайн:\n"
+                "🔗 https://prodaybot.ru/offer"
+            )
+        )
+    except Exception as e:
+        logger.error(f"Ошибка отправки оферты: {e}")
+        await callback.message.answer(
+            "📄 <b>Публичная оферта</b>\n\n"
+            "🔗 https://prodaybot.ru/offer"
+        )
+
+    await callback.answer()
 
 
 # =============================================================================
