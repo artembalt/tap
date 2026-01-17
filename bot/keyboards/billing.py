@@ -26,10 +26,10 @@ def get_deposit_keyboard() -> InlineKeyboardMarkup:
     """Меню пополнения баланса"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="⭐ Пополнить Stars", callback_data="deposit_stars"),
+            InlineKeyboardButton(text="⭐ Telegram Stars", callback_data="deposit_stars"),
         ],
         [
-            InlineKeyboardButton(text="💳 Пополнить ₽ (скоро)", callback_data="deposit_rub"),
+            InlineKeyboardButton(text="💳 Банковская карта", callback_data="deposit_rub"),
         ],
         [
             InlineKeyboardButton(text="📄 Оферта", callback_data="show_offer"),

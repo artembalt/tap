@@ -87,6 +87,79 @@ async def deposit_stars_amount(callback: CallbackQuery, bot: Bot):
     await callback.answer()
 
 
+# =============================================================================
+# ROBOKASSA - ПОПОЛНЕНИЕ РУБЛЯМИ
+# =============================================================================
+
+@router.callback_query(F.data == "deposit_rub")
+async def deposit_rub_start(callback: CallbackQuery):
+    """Начало пополнения баланса рублями через Robokassa"""
+    await callback.message.edit_text(
+        "💳 <b>Пополнение баланса в рублях</b>\n\n"
+        "Оплата банковской картой через Robokassa.\n\n"
+        "Выберите сумму пополнения:",
+        reply_markup=get_deposit_amount_keyboard("rub")
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("deposit_rub_"))
+async def deposit_rub_amount(callback: CallbackQuery):
+    """Создание платежа Robokassa"""
+    amount = int(callback.data.split("_")[-1])
+    user_id = callback.from_user.id
+
+    async with get_session() as session:
+        user = await session.get(User, user_id)
+        if not user:
+            await callback.answer("Ошибка: пользователь не найден", show_alert=True)
+            return
+
+        # Генерируем уникальный InvId (timestamp + user_id)
+        inv_id = int(time.time() * 1000) % 2147483647  # Robokassa ограничение на int32
+
+        # Создаём запись о платеже в статусе pending
+        payment = Payment(
+            user_id=user_id,
+            amount=amount,
+            currency="RUB",
+            status=PaymentStatus.PENDING.value,
+            payment_type="deposit",
+            payment_system="robokassa",
+            payment_id=str(inv_id),  # Сохраняем InvId
+        )
+        session.add(payment)
+        await session.commit()
+
+        # Генерируем ссылку на оплату
+        payment_url = generate_payment_url(
+            amount=float(amount),
+            inv_id=inv_id,
+            description=f"Пополнение баланса {amount} руб",
+            user_id=user_id,
+        )
+
+        logger.info(f"Robokassa payment created: inv_id={inv_id}, user={user_id}, amount={amount}")
+
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"💳 Оплатить {amount} ₽", url=payment_url)],
+        [InlineKeyboardButton(text="« Назад", callback_data="deposit_menu")],
+    ])
+
+    await callback.message.edit_text(
+        f"💳 <b>Оплата {amount} ₽</b>\n\n"
+        f"Нажмите кнопку ниже для перехода на страницу оплаты.\n\n"
+        f"После успешной оплаты баланс пополнится автоматически.\n\n"
+        f"<i>Нажимая кнопку оплаты, вы соглашаетесь с "
+        f"<a href='https://prodaybot.ru/offer'>офертой</a></i>",
+        reply_markup=keyboard,
+        disable_web_page_preview=True
+    )
+    await callback.answer()
+
+
 @router.pre_checkout_query()
 async def process_pre_checkout(pre_checkout: PreCheckoutQuery, bot: Bot):
     """Подтверждение платежа (pre-checkout)"""
