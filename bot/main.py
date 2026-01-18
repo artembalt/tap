@@ -191,22 +191,31 @@ async def robokassa_result_handler(request: web.Request) -> web.Response:
     Вызывается сервером Robokassa после оплаты.
     Должен вернуть OK{InvId} при успехе.
     """
+    start_time = time.time()
+
+    # Получаем IP (учитываем прокси)
+    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    if not client_ip:
+        client_ip = request.headers.get("X-Real-IP", request.remote or "unknown")
+
+    inv_id = "?"
+
     try:
         # Robokassa шлёт POST
         data = await request.post()
+        params = dict(data)
 
         out_sum = data.get("OutSum", "")
         inv_id = data.get("InvId", "")
         signature = data.get("SignatureValue", "")
         shp_user_id = data.get("Shp_user_id", "")
 
-        logger.info(
-            f"Robokassa Result: inv_id={inv_id}, out_sum={out_sum}, user_id={shp_user_id}"
-        )
+        # Логируем входящий webhook
+        PaymentLogger.log_webhook_received("RESULT", inv_id, client_ip, params)
 
         # Проверяем подпись
         if not verify_result_signature(out_sum, inv_id, signature, shp_user_id):
-            logger.error(f"Robokassa: неверная подпись для inv_id={inv_id}")
+            PaymentLogger.log_signature_invalid(inv_id, client_ip, signature, "***")
             return web.Response(text="bad signature", status=400)
 
         amount = parse_amount(out_sum)
@@ -214,7 +223,7 @@ async def robokassa_result_handler(request: web.Request) -> web.Response:
         user_id = int(shp_user_id) if shp_user_id else 0
 
         if not user_id or not amount:
-            logger.error(f"Robokassa: некорректные данные inv_id={inv_id}")
+            PaymentLogger.log_payment_error(inv_id, "invalid data (user_id or amount)", client_ip)
             return web.Response(text="bad data", status=400)
 
         # Обрабатываем платёж
@@ -227,19 +236,22 @@ async def robokassa_result_handler(request: web.Request) -> web.Response:
             payment = result.scalar_one_or_none()
 
             if not payment:
-                logger.error(f"Robokassa: платёж не найден inv_id={inv_id}")
+                PaymentLogger.log_payment_error(inv_id, "payment not found in DB", client_ip, user_id)
                 return web.Response(text="payment not found", status=404)
 
             if payment.status == PaymentStatus.SUCCESS.value:
                 # Уже обработан (дубликат уведомления)
-                logger.info(f"Robokassa: платёж уже обработан inv_id={inv_id}")
+                PaymentLogger.log_payment_duplicate(inv_id, client_ip)
                 return web.Response(text=f"OK{inv_id}")
 
             # Получаем пользователя
             user = await session.get(User, user_id)
             if not user:
-                logger.error(f"Robokassa: пользователь не найден user_id={user_id}")
+                PaymentLogger.log_payment_error(inv_id, "user not found", client_ip, user_id)
                 return web.Response(text="user not found", status=404)
+
+            # Сохраняем баланс до пополнения
+            balance_before = user.balance_rub
 
             # Обновляем статус платежа
             payment.status = PaymentStatus.SUCCESS.value
@@ -258,9 +270,16 @@ async def robokassa_result_handler(request: web.Request) -> web.Response:
 
             await session.commit()
 
-            logger.info(
-                f"Robokassa: платёж успешен inv_id={inv_id}, "
-                f"user_id={user_id}, amount={amount}"
+            # Логируем успешный платёж
+            duration_ms = int((time.time() - start_time) * 1000)
+            PaymentLogger.log_payment_success(
+                inv_id=inv_id,
+                user_id=user_id,
+                amount=amount,
+                balance_before=balance_before,
+                balance_after=user.balance_rub,
+                ip=client_ip,
+                duration_ms=duration_ms
             )
 
             # Отправляем уведомление пользователю
@@ -273,12 +292,13 @@ async def robokassa_result_handler(request: web.Request) -> web.Response:
                         f"💰 Текущий баланс: {user.balance_rub:.0f} ₽"
                     )
                 except Exception as e:
-                    logger.warning(f"Не удалось отправить уведомление: {e}")
+                    logger.warning(f"Не удалось отправить уведомление user_id={user_id}: {e}")
 
         return web.Response(text=f"OK{inv_id}")
 
     except Exception as e:
-        logger.error(f"Robokassa Result error: {e}")
+        PaymentLogger.log_payment_error(inv_id, f"exception: {e}", client_ip)
+        logger.exception(f"Robokassa Result exception: {e}")
         return web.Response(text="error", status=500)
 
 
@@ -287,10 +307,15 @@ async def robokassa_success_handler(request: web.Request) -> web.Response:
     Success URL — редирект пользователя после успешной оплаты.
     Показываем страницу с благодарностью.
     """
+    # Получаем IP
+    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    if not client_ip:
+        client_ip = request.headers.get("X-Real-IP", request.remote or "unknown")
+
     inv_id = request.query.get("InvId", "")
     out_sum = request.query.get("OutSum", "")
 
-    logger.info(f"Robokassa Success: inv_id={inv_id}, out_sum={out_sum}")
+    PaymentLogger.log_user_redirect("SUCCESS", inv_id, client_ip)
 
     # Возвращаем HTML страницу
     html = f"""
@@ -352,9 +377,15 @@ async def robokassa_fail_handler(request: web.Request) -> web.Response:
     """
     Fail URL — редирект при отмене/ошибке оплаты.
     """
-    inv_id = request.query.get("InvId", "")
+    # Получаем IP
+    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    if not client_ip:
+        client_ip = request.headers.get("X-Real-IP", request.remote or "unknown")
 
-    logger.info(f"Robokassa Fail: inv_id={inv_id}")
+    inv_id = request.query.get("InvId", "")
+    shp_user_id = request.query.get("Shp_user_id", "?")
+
+    PaymentLogger.log_payment_failed(inv_id, shp_user_id, client_ip)
 
     html = """
     <!DOCTYPE html>
