@@ -118,23 +118,15 @@ class ClaudeModerator:
         self._error_count = 0
         self._circuit_open_until = 0.0
 
-    def _record_error(self, error: Exception):
+    def _record_error(self, error: Exception, status_code: int = None, response_body: str = None):
         """Записать ошибку и возможно открыть circuit breaker"""
         self._error_count += 1
         current_time = time.time()
 
-        # Определяем тип ошибки
-        is_auth_error = "403" in str(error) or "401" in str(error)
-        is_rate_limit = "429" in str(error)
-
         # Логируем первую ошибку как ERROR, последующие реже
         if self._error_count == 1 or (current_time - self._last_error_logged) > 60:
-            if is_auth_error:
-                logger.error(f"[LLM] Ошибка авторизации API (403/401): {error}")
-            elif is_rate_limit:
-                logger.warning(f"[LLM] Rate limit API (429): {error}")
-            else:
-                logger.error(f"[LLM] Ошибка модерации: {error}")
+            error_details = self._format_api_error(error, status_code, response_body)
+            logger.error(f"[LLM] {error_details}")
             self._last_error_logged = current_time
 
         # Открываем circuit breaker после N ошибок
@@ -144,6 +136,48 @@ class ClaudeModerator:
                 f"[LLM] Circuit breaker ОТКРЫТ на {CIRCUIT_BREAKER_TIMEOUT}с "
                 f"после {self._error_count} ошибок. LLM-модерация временно отключена."
             )
+
+    def _format_api_error(self, error: Exception, status_code: int = None, response_body: str = None) -> str:
+        """Форматирование детальной информации об ошибке API"""
+        parts = []
+
+        # Определяем тип ошибки по статус-коду
+        if status_code:
+            error_type = {
+                400: "Bad Request (неверный запрос)",
+                401: "Unauthorized (неверный API ключ)",
+                403: "Forbidden (доступ запрещён — проверьте API ключ и лимиты)",
+                404: "Not Found (модель не найдена)",
+                429: "Rate Limit (превышен лимит запросов)",
+                500: "Server Error (ошибка сервера Anthropic)",
+                502: "Bad Gateway",
+                503: "Service Unavailable (API временно недоступен)",
+                529: "Overloaded (API перегружен)",
+            }.get(status_code, f"HTTP {status_code}")
+            parts.append(f"Ошибка API: {error_type}")
+        else:
+            parts.append(f"Ошибка: {type(error).__name__}")
+
+        # Добавляем тело ответа с ошибкой (там обычно есть детали)
+        if response_body:
+            try:
+                error_data = json.loads(response_body)
+                if "error" in error_data:
+                    err = error_data["error"]
+                    err_type = err.get("type", "unknown")
+                    err_msg = err.get("message", "")
+                    parts.append(f"Тип: {err_type}")
+                    if err_msg:
+                        parts.append(f"Сообщение: {err_msg[:200]}")
+            except json.JSONDecodeError:
+                if response_body and len(response_body) < 500:
+                    parts.append(f"Ответ: {response_body[:200]}")
+
+        # Добавляем оригинальную ошибку
+        if str(error) and str(error) not in " | ".join(parts):
+            parts.append(f"Exception: {str(error)[:100]}")
+
+        return " | ".join(parts)
 
     async def moderate(
         self,
@@ -194,6 +228,23 @@ class ClaudeModerator:
             result = await self._call_claude(text, ad_category, ad_subcategory, content_type)
             self._record_success()
             return result
+        except httpx.HTTPStatusError:
+            # HTTP ошибки уже залогированы в _call_claude
+            return LLMModerationResult(
+                is_safe=True,
+                category=ModerationCategory.SAFE,
+                confidence=0.0,
+                reason="Ошибка LLM API"
+            )
+        except httpx.TimeoutException as e:
+            self._record_error(e)
+            logger.warning(f"[LLM] Таймаут запроса к API: {e}")
+            return LLMModerationResult(
+                is_safe=True,
+                category=ModerationCategory.SAFE,
+                confidence=0.0,
+                reason="Таймаут LLM API"
+            )
         except Exception as e:
             self._record_error(e)
             # При ошибке пропускаем (fail-open) — rule-based уже проверил
@@ -264,7 +315,18 @@ class ClaudeModerator:
                 headers=headers,
                 json=payload
             )
-            response.raise_for_status()
+
+            # Детальная обработка HTTP ошибок
+            if response.status_code >= 400:
+                response_body = response.text
+                error = httpx.HTTPStatusError(
+                    f"HTTP {response.status_code}",
+                    request=response.request,
+                    response=response
+                )
+                self._record_error(error, response.status_code, response_body)
+                raise error
+
             data = response.json()
 
         # Парсим ответ
