@@ -7,12 +7,16 @@
 
 import hashlib
 import logging
-from typing import Optional, Tuple
+import time
+from typing import Optional, Dict, Any
 from urllib.parse import urlencode
 
 from bot.config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Специальный логгер для платежей (для удобной фильтрации)
+payment_logger = logging.getLogger("payments.robokassa")
 
 # URL для формирования платежа
 ROBOKASSA_URL = "https://auth.robokassa.ru/Merchant/Index.aspx"
@@ -140,3 +144,107 @@ def parse_inv_id(inv_id: str) -> int:
         return int(inv_id)
     except (ValueError, TypeError):
         return 0
+
+
+# =============================================================================
+# ЛОГИРОВАНИЕ ПЛАТЕЖЕЙ
+# =============================================================================
+
+class PaymentLogger:
+    """Структурированное логирование платежей Robokassa"""
+
+    @staticmethod
+    def log_payment_created(
+        inv_id: int,
+        user_id: int,
+        amount: float,
+        description: str
+    ):
+        """Логирование создания платежа"""
+        payment_logger.info(
+            f"[PAYMENT] CREATE | inv_id={inv_id} | user={user_id} | "
+            f"amount={amount:.2f}₽ | desc={description[:50]}"
+        )
+
+    @staticmethod
+    def log_webhook_received(
+        endpoint: str,
+        inv_id: str,
+        ip: str,
+        params: Dict[str, Any]
+    ):
+        """Логирование входящего webhook"""
+        # Скрываем подпись в логах
+        safe_params = {k: v for k, v in params.items() if k != "SignatureValue"}
+        safe_params["SignatureValue"] = "***"
+        payment_logger.info(
+            f"[PAYMENT] WEBHOOK {endpoint} | inv_id={inv_id} | IP={ip} | params={safe_params}"
+        )
+
+    @staticmethod
+    def log_signature_invalid(
+        inv_id: str,
+        ip: str,
+        received: str,
+        expected: str
+    ):
+        """Логирование неверной подписи"""
+        payment_logger.warning(
+            f"[PAYMENT] SIGNATURE_INVALID | inv_id={inv_id} | IP={ip} | "
+            f"received={received[:16]}... | expected={expected[:16]}..."
+        )
+
+    @staticmethod
+    def log_payment_success(
+        inv_id: str,
+        user_id: int,
+        amount: float,
+        balance_before: float,
+        balance_after: float,
+        ip: str,
+        duration_ms: int
+    ):
+        """Логирование успешного платежа"""
+        payment_logger.info(
+            f"[PAYMENT] SUCCESS | inv_id={inv_id} | user={user_id} | "
+            f"amount={amount:.2f}₽ | balance: {balance_before:.0f}→{balance_after:.0f}₽ | "
+            f"IP={ip} | {duration_ms}ms"
+        )
+
+    @staticmethod
+    def log_payment_duplicate(inv_id: str, ip: str):
+        """Логирование дубликата уведомления"""
+        payment_logger.info(
+            f"[PAYMENT] DUPLICATE | inv_id={inv_id} | IP={ip} | already processed"
+        )
+
+    @staticmethod
+    def log_payment_error(
+        inv_id: str,
+        error: str,
+        ip: str = None,
+        user_id: int = None
+    ):
+        """Логирование ошибки платежа"""
+        parts = [f"[PAYMENT] ERROR | inv_id={inv_id}"]
+        if user_id:
+            parts.append(f"user={user_id}")
+        if ip:
+            parts.append(f"IP={ip}")
+        parts.append(f"error={error}")
+        payment_logger.error(" | ".join(parts))
+
+    @staticmethod
+    def log_payment_failed(inv_id: str, user_id: str, ip: str):
+        """Логирование отменённого платежа (Fail URL)"""
+        payment_logger.info(
+            f"[PAYMENT] FAILED | inv_id={inv_id} | user={user_id} | IP={ip} | "
+            f"user cancelled or payment declined"
+        )
+
+    @staticmethod
+    def log_user_redirect(endpoint: str, inv_id: str, ip: str):
+        """Логирование редиректа пользователя"""
+        payment_logger.info(
+            f"[PAYMENT] REDIRECT {endpoint} | inv_id={inv_id} | IP={ip}"
+        )
