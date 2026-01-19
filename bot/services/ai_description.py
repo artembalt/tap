@@ -108,6 +108,9 @@ class AIDescriptionService:
         subcategory: str = None,
     ) -> AIDescriptionResult:
         """Вызов Claude API для улучшения описания"""
+        # DEBUG: проверяем ключ в момент запроса
+        logger.info(f"[AI_DESC] DEBUG _call_claude: api_key_len={len(self.api_key)}, api_key={self.api_key[:20]}...{self.api_key[-10:]}")
+
         headers = {
             "Content-Type": "application/json",
             "x-api-key": self.api_key,
