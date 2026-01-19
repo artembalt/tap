@@ -16,6 +16,7 @@ from bot.database.models import Ad, AdStatus, User
 from bot.utils.content_filter import (
     validate_content, validate_content_with_llm, get_rejection_message
 )
+from bot.services.vision_ocr import recognize_text_on_image, get_vision_ocr_service
 from bot.utils.limits import can_create_ad, get_user_limits, get_ad_duration_days
 from shared.regions_config import (
     REGIONS, CITIES, CATEGORIES, SUBCATEGORIES, DEAL_TYPES,
@@ -47,6 +48,74 @@ async def send_with_retry(message: Message, text: str, reply_markup=None, max_re
             else:
                 logger.error(f"Не удалось отправить сообщение: {e}")
                 raise
+
+
+async def check_photos_for_forbidden_text(
+    bot: Bot,
+    photo_ids: list,
+    category: str = None,
+    subcategory: str = None
+) -> tuple[bool, str]:
+    """
+    Проверяет фото на наличие запрещённого текста через OCR.
+
+    Returns:
+        (is_ok, error_message) - True если всё хорошо, иначе False и сообщение об ошибке
+    """
+    if not photo_ids:
+        return True, ""
+
+    # Проверяем, настроен ли OCR
+    ocr_service = get_vision_ocr_service()
+    if not ocr_service:
+        logger.debug("[OCR] Сервис не настроен, пропускаем проверку фото")
+        return True, ""
+
+    logger.info(f"[OCR] Проверяю {len(photo_ids)} фото на запрещённый текст")
+
+    for i, photo_id in enumerate(photo_ids):
+        try:
+            # Скачиваем фото
+            file = await bot.get_file(photo_id)
+            file_data = await bot.download_file(file.file_path)
+            image_bytes = file_data.read()
+
+            # Определяем формат
+            mime_type = "JPEG"
+            if file.file_path and file.file_path.endswith(".png"):
+                mime_type = "PNG"
+
+            # Распознаём текст
+            ocr_result = await recognize_text_on_image(image_bytes, mime_type)
+
+            if not ocr_result.success:
+                logger.warning(f"[OCR] Ошибка распознавания фото {i+1}: {ocr_result.error}")
+                continue  # При ошибке пропускаем фото, не блокируем
+
+            if not ocr_result.text or len(ocr_result.text.strip()) < 3:
+                continue  # Нет текста на фото
+
+            recognized_text = ocr_result.text.strip()
+            logger.info(f"[OCR] Фото {i+1}: распознано {len(recognized_text)} символов")
+
+            # Проверяем текст через rule-based фильтр
+            is_valid, rejection_reason = validate_content(
+                recognized_text,
+                content_type="photo_text",
+                category=category,
+                subcategory=subcategory
+            )
+
+            if not is_valid:
+                logger.warning(f"[OCR] Фото {i+1} содержит запрещённый текст: {rejection_reason}")
+                return False, f"На фото {i+1} обнаружен запрещённый контент:\n{rejection_reason}"
+
+        except Exception as e:
+            logger.error(f"[OCR] Ошибка при проверке фото {i+1}: {e}")
+            continue  # При ошибке пропускаем, не блокируем
+
+    logger.info("[OCR] Все фото прошли проверку")
+    return True, ""
 
 
 router = Router(name='ad_creation')
@@ -1165,11 +1234,37 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
     # Показываем спиннер
-    spinner_msg = await callback.message.answer("⏳ <b>Публикую объявление...</b>\n\nПожалуйста, подождите")
+    spinner_msg = await callback.message.answer("⏳ <b>Проверяю объявление...</b>\n\nПожалуйста, подождите")
+
+    # Проверяем фото на запрещённый текст через OCR
+    photos = data.get('photos', [])
+    if photos:
+        photos_ok, photos_error = await check_photos_for_forbidden_text(
+            bot=callback.message.bot,
+            photo_ids=photos,
+            category=data.get('category'),
+            subcategory=data.get('subcategory')
+        )
+        if not photos_ok:
+            await spinner_msg.edit_text(
+                f"❌ <b>Объявление отклонено</b>\n\n{photos_error}\n\n"
+                "Пожалуйста, замените фото и попробуйте снова."
+            )
+            # Возвращаем в состояние редактирования
+            await state.set_state(AdCreation.confirm)
+            from bot.keyboards.inline import get_confirm_with_edit_keyboard
+            await callback.message.answer(
+                "Вы можете отредактировать объявление:",
+                reply_markup=get_confirm_with_edit_keyboard()
+            )
+            return
+
+    # Обновляем спиннер
+    await spinner_msg.edit_text("⏳ <b>Публикую объявление...</b>\n\nПожалуйста, подождите")
 
     try:
         bot_info = await callback.message.bot.get_me()
-        
+
         async with get_db_session() as session:
             price_str = data.get('price', 'Договорная')
             price_value = None

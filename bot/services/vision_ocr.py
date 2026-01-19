@@ -167,12 +167,15 @@ def get_vision_ocr_service() -> Optional[VisionOCRService]:
     if _service is None:
         try:
             from bot.config import settings
-            if settings.YANDEX_GPT_API_KEY and settings.YANDEX_GPT_FOLDER_ID:
+            # Используем отдельный ключ для Vision, если есть
+            api_key = settings.YANDEX_VISION_API_KEY or settings.YANDEX_GPT_API_KEY
+            if api_key and settings.YANDEX_GPT_FOLDER_ID:
                 _service = VisionOCRService(
-                    api_key=settings.YANDEX_GPT_API_KEY,
+                    api_key=api_key,
                     folder_id=settings.YANDEX_GPT_FOLDER_ID
                 )
-                logger.info("[OCR] Yandex Vision OCR сервис инициализирован")
+                key_source = "YANDEX_VISION_API_KEY" if settings.YANDEX_VISION_API_KEY else "YANDEX_GPT_API_KEY"
+                logger.info(f"[OCR] Yandex Vision OCR сервис инициализирован (key={key_source})")
             else:
                 logger.info("[OCR] Yandex Vision OCR не настроен")
         except Exception as e:
