@@ -6,17 +6,17 @@
 
 ## 2026-01-19
 
-### Исправлено
-- **Исправлена ошибка 403 Forbidden для Claude API** — AI-описания теперь работают
-  - **Причина:** IP сервера (89.104.68.80) в России, Anthropic блокирует запросы из RU
-  - **Решение:** Добавлен HTTP прокси (выход из Германии) в supervisor конфиг
-  - Изменён `/etc/supervisor/conf.d/telegram_bot.conf` — добавлена директива `environment=` с прокси
-  - Исправлена ошибка синтаксиса в `ai_description.py` (backslash в f-string)
-  - Теперь используется `json.dumps()` для безопасной сериализации строк в subprocess
+### Изменено
+- **Переход с Claude API на YandexGPT** — решена проблема блокировки Anthropic из России
+  - LLM-модерация теперь использует YandexGPT Pro (`bot/utils/llm_moderation.py`)
+  - AI-описания теперь используют YandexGPT Pro (`bot/services/ai_description.py`)
+  - Новые настройки в `.env`: `YANDEX_GPT_API_KEY`, `YANDEX_GPT_FOLDER_ID`, `YANDEX_GPT_MODEL`
+  - Обновлён `bot/config/settings.py` — убраны Claude настройки, добавлены YandexGPT
+  - Код упрощён: убран subprocess, прямые вызовы API через httpx
 
 ### Добавлено
-- **AI-улучшение описаний объявлений** — помощь в написании описаний с помощью Claude AI
-  - Новый сервис `bot/services/ai_description.py` — улучшение текста через Claude Haiku
+- **AI-улучшение описаний объявлений** — помощь в написании описаний с помощью YandexGPT
+  - Сервис `bot/services/ai_description.py` — улучшение текста через YandexGPT Pro
   - После ввода описания пользователь видит кнопки: [✅ Далее] [✨ Улучшить с ИИ]
   - AI сохраняет всю информацию от пользователя, исправляет орфографию, делает текст читаемым
   - Результат показывается в `<code>` для удобного копирования и редактирования

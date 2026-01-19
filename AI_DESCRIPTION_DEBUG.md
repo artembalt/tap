@@ -2,40 +2,54 @@
 
 ## Дата: 2026-01-19
 
-## Статус: ✅ РЕШЕНО
+## Статус: ✅ РЕШЕНО (переход на YandexGPT)
 
 ## Суть проблемы
-Добавили функцию "Улучшить описание с ИИ" в создание объявлений. Claude API возвращает **403 Forbidden** внутри бота, но **работает при тестах напрямую**.
+Добавили функцию "Улучшить описание с ИИ" в создание объявлений. Claude API возвращает **403 Forbidden** — Anthropic не работает в России.
 
 ---
 
-## РЕШЕНИЕ
+## ФИНАЛЬНОЕ РЕШЕНИЕ: Переход на YandexGPT
 
-### Причина
-IP сервера (`89.104.68.80`) находится в **России** (Санкт-Петербург, REG.RU).
-**Anthropic не предоставляет услуги в России**, поэтому блокирует все запросы с российских IP → 403 "Request not allowed".
+### Причина проблемы с Claude
+IP сервера (`89.104.68.80`) в России. **Anthropic не предоставляет услуги в России** → 403 "Request not allowed".
 
-### Почему работало "напрямую"
-Тесты "напрямую" запускались из терминала, где были установлены глобальные переменные `HTTP_PROXY` / `HTTPS_PROXY`, направляющие трафик через прокси в **Германии** (93.127.144.239). Anthropic разрешает запросы из Германии.
+### Решение
+Полный переход на **YandexGPT Pro** — работает из России без ограничений.
 
-### Почему не работало в боте
-Supervisor запускал бота **без этих переменных окружения** — они не передавались процессу.
+### Что изменено
 
-### Исправления
+1. **`bot/utils/llm_moderation.py`** — переписан для YandexGPT API
+2. **`bot/services/ai_description.py`** — переписан для YandexGPT API
+3. **`bot/config/settings.py`** — новые настройки:
+   - `YANDEX_GPT_API_KEY`
+   - `YANDEX_GPT_FOLDER_ID`
+   - `YANDEX_GPT_MODEL`
+4. **`.env`** — добавлены ключи YandexGPT, удалены Claude ключи
 
-1. **Добавлен прокси в supervisor** (`/etc/supervisor/conf.d/telegram_bot.conf`):
-   ```ini
-   environment=HTTP_PROXY="http://user353807:na570m@93.127.144.239:8899",HTTPS_PROXY="http://user353807:na570m@93.127.144.239:8899"
-   ```
+### YandexGPT API формат
 
-2. **Исправлена ошибка синтаксиса** в `bot/services/ai_description.py`:
-   - Python не позволяет backslash в f-string выражениях
-   - Заменено `{user_message.replace('"', '\\"')}` на использование `json.dumps()`
+**Endpoint:** `https://llm.api.cloud.yandex.net/foundationModels/v1/completion`
 
-3. **Перезапуск supervisor**:
-   ```bash
-   supervisorctl reread && supervisorctl update && supervisorctl restart telegram_bot
-   ```
+**Headers:**
+```
+Authorization: Api-Key {api_key}
+x-folder-id: {folder_id}
+```
+
+**Payload:**
+```json
+{
+  "modelUri": "gpt://{folder_id}/yandexgpt/latest",
+  "completionOptions": {"stream": false, "temperature": 0.3, "maxTokens": 256},
+  "messages": [{"role": "system", "text": "..."}, {"role": "user", "text": "..."}]
+}
+```
+
+**Response:**
+```json
+{"result": {"alternatives": [{"message": {"role": "assistant", "text": "ответ"}}]}}
+```
 
 ---
 
