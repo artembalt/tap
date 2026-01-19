@@ -191,6 +191,9 @@ def get_ai_description_service() -> Optional[AIDescriptionService]:
     if _service is None:
         try:
             from bot.config import settings
+            # DEBUG: логируем часть ключа для диагностики
+            key = settings.CLAUDE_API_KEY or ""
+            logger.info(f"[AI_DESC] DEBUG: key_len={len(key)}, start={key[:15]}...")
             if settings.CLAUDE_API_KEY and settings.AI_DESCRIPTION_ENABLED:
                 _service = AIDescriptionService(
                     api_key=settings.CLAUDE_API_KEY,
