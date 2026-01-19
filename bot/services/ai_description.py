@@ -126,6 +126,10 @@ class AIDescriptionService:
 
 Улучши это описание:"""
 
+        # Используем json.dumps для безопасной сериализации строк
+        user_message_json = json.dumps(user_message, ensure_ascii=False)
+        system_prompt_json = json.dumps(IMPROVE_DESCRIPTION_PROMPT, ensure_ascii=False)
+
         # Python скрипт для выполнения в subprocess
         script = f'''
 import anthropic
@@ -136,8 +140,8 @@ try:
     message = client.messages.create(
         model="{self.model}",
         max_tokens=512,
-        system="""{IMPROVE_DESCRIPTION_PROMPT}""",
-        messages=[{{"role": "user", "content": """{user_message.replace('"', '\\"')}"""}}]
+        system={system_prompt_json},
+        messages=[{{"role": "user", "content": {user_message_json}}}]
     )
     result = {{"success": True, "text": message.content[0].text}}
 except Exception as e:
@@ -147,10 +151,17 @@ print(json.dumps(result, ensure_ascii=False))
 
         try:
             # Запускаем в subprocess для изоляции
+            # ВАЖНО: очищаем прокси-переменные, т.к. Anthropic блокирует запросы через прокси
+            import os
+            clean_env = os.environ.copy()
+            for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                clean_env.pop(proxy_var, None)
+
             proc = await asyncio.create_subprocess_exec(
                 '/home/telegram-ads-platform/tramp/bin/python', '-c', script,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+                stderr=subprocess.PIPE,
+                env=clean_env
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
 
