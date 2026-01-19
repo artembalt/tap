@@ -264,3 +264,22 @@ def get_back_keyboard() -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🔙 Главное меню", callback_data="back_to_menu")
     return builder.as_markup()
+
+
+# ========== AI-улучшение описаний ==========
+
+def get_description_ai_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура для шага ввода описания с кнопкой AI"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✨ Улучшить с ИИ", callback_data="ai_improve_description")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def get_ai_description_result_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура после улучшения описания ИИ"""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Использовать", callback_data="ai_desc_use")
+    builder.button(text="✨ Улучшить ещё", callback_data="ai_improve_description")
+    builder.adjust(2)
+    return builder.as_markup()

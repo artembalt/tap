@@ -61,6 +61,7 @@ class AdCreation(StatesGroup):
     deal_type = State()
     title = State()
     description = State()
+    description_ai_pending = State()  # Ожидание после AI-улучшения
     condition = State()
     photos = State()
     video = State()
@@ -384,7 +385,13 @@ async def process_title(message: Message, state: FSMContext):
 async def ask_description(message: Message, state: FSMContext):
     logger.info("[DESC] ask_description")
     await state.set_state(AdCreation.description)
-    await message.answer("📄 <b>Шаг 7: Описание</b>\n\nВведите описание (до 1000 символов):")
+    from bot.keyboards.inline import get_description_ai_keyboard
+    await message.answer(
+        "📄 <b>Шаг 7: Описание</b>\n\n"
+        "Введите описание (до 1000 символов).\n\n"
+        "💡 <i>Напишите описание и нажмите кнопку ниже, чтобы ИИ помог его улучшить.</i>",
+        reply_markup=get_description_ai_keyboard()
+    )
 
 
 @router.message(AdCreation.description)
@@ -429,6 +436,11 @@ async def process_description(message: Message, state: FSMContext):
     display = description[:50] + "..." if len(description) > 50 else description
     await message.answer(f"✅ <b>Описание:</b> {display}")
 
+    await _go_to_next_after_description(message, state)
+
+
+async def _go_to_next_after_description(message: Message, state: FSMContext):
+    """Переход на следующий шаг после описания"""
     data = await state.get_data()
     deal_type = data.get('deal_type')
 
@@ -436,6 +448,109 @@ async def process_description(message: Message, state: FSMContext):
         await ask_condition(message, state)
     else:
         await ask_photos(message, state)
+
+
+# ========== AI-УЛУЧШЕНИЕ ОПИСАНИЯ ==========
+@router.callback_query(F.data == "ai_improve_description")
+async def ai_improve_description_callback(callback: CallbackQuery, state: FSMContext):
+    """Улучшение описания с помощью ИИ"""
+    logger.info(f"[AI_DESC] ai_improve_description, user={callback.from_user.id}")
+    await callback.answer()
+
+    data = await state.get_data()
+    current_desc = data.get('pending_description') or data.get('description')
+
+    if not current_desc:
+        await callback.message.answer(
+            "❌ Сначала введите описание, затем нажмите кнопку для улучшения."
+        )
+        return
+
+    # Показываем индикатор загрузки
+    processing_msg = await callback.message.answer("🔄 <i>Улучшаю описание с помощью ИИ...</i>")
+
+    try:
+        from bot.services.ai_description import improve_description
+        result = await improve_description(
+            original_text=current_desc,
+            title=data.get('title'),
+            category=data.get('category'),
+            subcategory=data.get('subcategory'),
+        )
+
+        await processing_msg.delete()
+
+        if not result.success:
+            await callback.message.answer(f"❌ {result.error}")
+            return
+
+        # Сохраняем улучшенное описание как pending
+        await state.update_data(pending_description=result.improved_text)
+        await state.set_state(AdCreation.description_ai_pending)
+
+        from bot.keyboards.inline import get_ai_description_result_keyboard
+        await callback.message.answer(
+            f"✨ <b>Улучшенное описание:</b>\n\n"
+            f"<code>{result.improved_text}</code>\n\n"
+            f"👆 <i>Нажмите на текст, чтобы скопировать и отредактировать.</i>",
+            reply_markup=get_ai_description_result_keyboard()
+        )
+
+    except Exception as e:
+        logger.error(f"[AI_DESC] Ошибка: {e}")
+        await processing_msg.delete()
+        await callback.message.answer("❌ Произошла ошибка, попробуйте позже.")
+
+
+@router.callback_query(F.data == "ai_desc_use")
+async def ai_desc_use_callback(callback: CallbackQuery, state: FSMContext):
+    """Использовать улучшенное описание"""
+    logger.info(f"[AI_DESC] ai_desc_use, user={callback.from_user.id}")
+    await callback.answer()
+
+    data = await state.get_data()
+    improved_desc = data.get('pending_description')
+
+    if not improved_desc:
+        await callback.message.answer("❌ Описание не найдено.")
+        return
+
+    # Сохраняем как основное описание
+    await state.update_data(description=improved_desc, pending_description=None)
+
+    display = improved_desc[:50] + "..." if len(improved_desc) > 50 else improved_desc
+    await callback.message.answer(f"✅ <b>Описание сохранено:</b> {display}")
+
+    await _go_to_next_after_description(callback.message, state)
+
+
+@router.message(AdCreation.description_ai_pending)
+async def process_description_ai_pending(message: Message, state: FSMContext):
+    """Обработка нового текста после AI-улучшения (пользователь отредактировал)"""
+    logger.info("[AI_DESC] process_description_ai_pending - пользователь ввёл новый текст")
+
+    if not message.text:
+        await message.answer("❌ Введите текст описания")
+        return
+
+    description = message.text.strip()[:1000]
+
+    # Проверка контента
+    filter_result = validate_content(description)
+    if not filter_result.is_valid:
+        await message.answer(get_rejection_message(filter_result))
+        return
+
+    # Сохраняем как pending для возможности улучшения
+    await state.update_data(pending_description=description)
+
+    from bot.keyboards.inline import get_ai_description_result_keyboard
+    await message.answer(
+        f"📝 <b>Ваше описание:</b>\n\n"
+        f"<code>{description}</code>\n\n"
+        f"Выберите действие:",
+        reply_markup=get_ai_description_result_keyboard()
+    )
 
 
 # ========== СОСТОЯНИЕ ==========

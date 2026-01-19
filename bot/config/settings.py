@@ -106,6 +106,10 @@ class Settings:
     CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-3-haiku-20240307")  # haiku для скорости/дешевизны
     LLM_MODERATION_ENABLED: bool = os.getenv("LLM_MODERATION_ENABLED", "True").lower() == "true"
     LLM_MODERATION_THRESHOLD: float = float(os.getenv("LLM_MODERATION_THRESHOLD", "0.7"))  # 0-1
+
+    # AI-улучшение описаний объявлений
+    AI_DESCRIPTION_ENABLED: bool = os.getenv("AI_DESCRIPTION_ENABLED", "True").lower() == "true"
+    AI_DESCRIPTION_DAILY_LIMIT: int = int(os.getenv("AI_DESCRIPTION_DAILY_LIMIT", "5"))  # Лимит генераций в день
     
     @property
     def database_url(self) -> str:
