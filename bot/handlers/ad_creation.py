@@ -17,6 +17,7 @@ from bot.utils.content_filter import (
     validate_content, validate_content_with_llm, get_rejection_message
 )
 from bot.services.vision_ocr import recognize_text_on_image, get_vision_ocr_service
+from bot.services.local_moderation import moderate_image, is_available as local_moderation_available
 from bot.utils.limits import can_create_ad, get_user_limits, get_ad_duration_days
 from shared.regions_config import (
     REGIONS, CITIES, CATEGORIES, SUBCATEGORIES, DEAL_TYPES,
@@ -57,7 +58,11 @@ async def check_photos_for_forbidden_text(
     subcategory: str = None
 ) -> tuple[bool, str]:
     """
-    Проверяет фото на наличие запрещённого текста через OCR.
+    Проверяет фото на наличие запрещённого контента.
+
+    Использует:
+    1. Локальную модерацию (PaddleOCR + NudeNet) — без лимитов, быстро
+    2. Yandex Vision OCR — как fallback если локальная недоступна
 
     Returns:
         (is_ok, error_message) - True если всё хорошо, иначе False и сообщение об ошибке
@@ -65,56 +70,71 @@ async def check_photos_for_forbidden_text(
     if not photo_ids:
         return True, ""
 
-    # Проверяем, настроен ли OCR
-    ocr_service = get_vision_ocr_service()
-    if not ocr_service:
-        logger.debug("[OCR] Сервис не настроен, пропускаем проверку фото")
+    # Определяем метод проверки
+    use_local = local_moderation_available()
+    use_cloud = get_vision_ocr_service() is not None
+
+    if not use_local and not use_cloud:
+        logger.debug("[PhotoCheck] Ни локальная модерация, ни OCR не настроены, пропускаем")
         return True, ""
 
-    logger.info(f"[OCR] Проверяю {len(photo_ids)} фото на запрещённый текст")
+    method = "local" if use_local else "cloud"
+    logger.info(f"[PhotoCheck] Проверяю {len(photo_ids)} фото ({method})")
 
     for i, photo_id in enumerate(photo_ids):
         try:
-            # Задержка между запросами (Yandex Vision: 1 req/sec limit)
-            if i > 0:
-                await asyncio.sleep(1.2)
-
             # Скачиваем фото
             file = await bot.get_file(photo_id)
             file_data = await bot.download_file(file.file_path)
             image_bytes = file_data.read()
 
-            # Определяем формат
-            mime_type = "JPEG"
-            if file.file_path and file.file_path.endswith(".png"):
-                mime_type = "PNG"
+            if use_local:
+                # === ЛОКАЛЬНАЯ МОДЕРАЦИЯ (PaddleOCR + NudeNet) ===
+                result = await moderate_image(
+                    image_bytes,
+                    check_nsfw=True,
+                    check_text=True,
+                    nsfw_threshold=0.6
+                )
 
-            # Распознаём текст
-            ocr_result = await recognize_text_on_image(image_bytes, mime_type)
+                # Проверка NSFW
+                if not result.is_safe:
+                    logger.warning(f"[PhotoCheck] Фото {i+1} NSFW: score={result.nsfw_score:.2f}, labels={result.nsfw_labels}")
+                    return False, f"На фото {i+1} обнаружен недопустимый контент (18+)"
 
-            if not ocr_result.success:
-                logger.warning(f"[OCR] Ошибка распознавания фото {i+1}: {ocr_result.error}")
-                continue  # При ошибке пропускаем фото, не блокируем
+                # Проверка текста
+                if result.recognized_text and len(result.recognized_text.strip()) >= 3:
+                    filter_result = validate_content(result.recognized_text)
+                    if not filter_result.is_valid:
+                        rejection = filter_result.rejection_reason or "Запрещённый контент"
+                        logger.warning(f"[PhotoCheck] Фото {i+1} текст: {rejection}")
+                        return False, f"На фото {i+1} обнаружен запрещённый текст:\n{rejection}"
 
-            if not ocr_result.text or len(ocr_result.text.strip()) < 3:
-                continue  # Нет текста на фото
+            else:
+                # === YANDEX VISION OCR (fallback) ===
+                # Задержка для rate limit (1 req/sec)
+                if i > 0:
+                    await asyncio.sleep(1.2)
 
-            recognized_text = ocr_result.text.strip()
-            logger.info(f"[OCR] Фото {i+1}: распознано {len(recognized_text)} символов, текст: {recognized_text[:100]}")
+                mime_type = "PNG" if file.file_path and file.file_path.endswith(".png") else "JPEG"
+                ocr_result = await recognize_text_on_image(image_bytes, mime_type)
 
-            # Проверяем текст через rule-based фильтр
-            filter_result = validate_content(recognized_text)
+                if not ocr_result.success:
+                    logger.warning(f"[PhotoCheck] OCR ошибка фото {i+1}: {ocr_result.error}")
+                    continue
 
-            if not filter_result.is_valid:
-                rejection = filter_result.rejection_reason or "Запрещённый контент"
-                logger.warning(f"[OCR] Фото {i+1} содержит запрещённый текст: {rejection}")
-                return False, f"На фото {i+1} обнаружен запрещённый контент:\n{rejection}"
+                if ocr_result.text and len(ocr_result.text.strip()) >= 3:
+                    filter_result = validate_content(ocr_result.text.strip())
+                    if not filter_result.is_valid:
+                        rejection = filter_result.rejection_reason or "Запрещённый контент"
+                        logger.warning(f"[PhotoCheck] Фото {i+1} текст: {rejection}")
+                        return False, f"На фото {i+1} обнаружен запрещённый текст:\n{rejection}"
 
         except Exception as e:
-            logger.error(f"[OCR] Ошибка при проверке фото {i+1}: {e}")
+            logger.error(f"[PhotoCheck] Ошибка фото {i+1}: {e}")
             continue  # При ошибке пропускаем, не блокируем
 
-    logger.info("[OCR] Все фото прошли проверку")
+    logger.info("[PhotoCheck] Все фото прошли проверку")
     return True, ""
 
 

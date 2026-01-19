@@ -116,6 +116,10 @@ class Settings:
     # AI-улучшение описаний объявлений
     AI_DESCRIPTION_ENABLED: bool = os.getenv("AI_DESCRIPTION_ENABLED", "True").lower() == "true"
     AI_DESCRIPTION_DAILY_LIMIT: int = int(os.getenv("AI_DESCRIPTION_DAILY_LIMIT", "5"))  # Лимит генераций в день
+
+    # Локальная модерация изображений (PaddleOCR + NudeNet)
+    LOCAL_MODERATION_ENABLED: bool = os.getenv("LOCAL_MODERATION_ENABLED", "True").lower() == "true"
+    LOCAL_MODERATION_NSFW_THRESHOLD: float = float(os.getenv("LOCAL_MODERATION_NSFW_THRESHOLD", "0.6"))  # 0-1
     
     @property
     def database_url(self) -> str:
