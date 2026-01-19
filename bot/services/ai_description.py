@@ -165,12 +165,15 @@ def get_ai_description_service() -> Optional[AIDescriptionService]:
     if _service is None:
         try:
             from bot.config import settings
-            if settings.CLAUDE_API_KEY and settings.AI_DESCRIPTION_ENABLED:
+            # Используем отдельный ключ для AI-описаний, если указан
+            api_key = settings.AI_DESCRIPTION_API_KEY or settings.CLAUDE_API_KEY
+            if api_key and settings.AI_DESCRIPTION_ENABLED:
                 _service = AIDescriptionService(
-                    api_key=settings.CLAUDE_API_KEY,
+                    api_key=api_key,
                     model=settings.CLAUDE_MODEL,
                 )
-                logger.info(f"[AI_DESC] Сервис инициализирован (model={settings.CLAUDE_MODEL})")
+                key_source = "AI_DESCRIPTION_API_KEY" if settings.AI_DESCRIPTION_API_KEY else "CLAUDE_API_KEY"
+                logger.info(f"[AI_DESC] Сервис инициализирован (model={settings.CLAUDE_MODEL}, key={key_source})")
             else:
                 logger.info("[AI_DESC] Сервис отключен")
         except Exception as e:

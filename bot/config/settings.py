@@ -110,6 +110,7 @@ class Settings:
     # AI-улучшение описаний объявлений
     AI_DESCRIPTION_ENABLED: bool = os.getenv("AI_DESCRIPTION_ENABLED", "True").lower() == "true"
     AI_DESCRIPTION_DAILY_LIMIT: int = int(os.getenv("AI_DESCRIPTION_DAILY_LIMIT", "5"))  # Лимит генераций в день
+    AI_DESCRIPTION_API_KEY: str = os.getenv("AI_DESCRIPTION_API_KEY", "")  # Отдельный ключ для AI-описаний
     
     @property
     def database_url(self) -> str:
