@@ -54,7 +54,13 @@ class AIDescriptionService:
         """Ленивая инициализация клиента"""
         if self._client is None:
             import anthropic
-            self._client = anthropic.AsyncAnthropic(api_key=self.api_key)
+            import httpx
+            # Явно создаём httpx клиент чтобы избежать конфликтов с aiogram
+            http_client = httpx.AsyncClient(timeout=30.0)
+            self._client = anthropic.AsyncAnthropic(
+                api_key=self.api_key,
+                http_client=http_client
+            )
         return self._client
 
     async def improve_description(
