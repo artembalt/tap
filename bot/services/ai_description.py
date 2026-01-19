@@ -151,17 +151,12 @@ print(json.dumps(result, ensure_ascii=False))
 
         try:
             # Запускаем в subprocess для изоляции
-            # ВАЖНО: очищаем прокси-переменные, т.к. Anthropic блокирует запросы через прокси
-            import os
-            clean_env = os.environ.copy()
-            for proxy_var in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
-                clean_env.pop(proxy_var, None)
-
+            # Прокси нужен! Сервер в RU, а Anthropic не работает в RU
+            # Прокси выходит из DE — там API работает
             proc = await asyncio.create_subprocess_exec(
                 '/home/telegram-ads-platform/tramp/bin/python', '-c', script,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                env=clean_env
+                stderr=subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
 
