@@ -269,10 +269,17 @@ def get_back_keyboard() -> InlineKeyboardMarkup:
 # ========== AI-улучшение описаний ==========
 
 def get_description_ai_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для шага ввода описания с кнопкой AI"""
+    """Клавиатура для шага ввода описания (подсказка про AI)"""
+    # Пустая клавиатура - кнопки появятся после ввода текста
+    return None
+
+
+def get_description_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Клавиатура после ввода описания - выбор: далее или улучшить"""
     builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Далее", callback_data="desc_confirm_next")
     builder.button(text="✨ Улучшить с ИИ", callback_data="ai_improve_description")
-    builder.adjust(1)
+    builder.adjust(2)
     return builder.as_markup()
 
 

@@ -385,12 +385,10 @@ async def process_title(message: Message, state: FSMContext):
 async def ask_description(message: Message, state: FSMContext):
     logger.info("[DESC] ask_description")
     await state.set_state(AdCreation.description)
-    from bot.keyboards.inline import get_description_ai_keyboard
     await message.answer(
         "📄 <b>Шаг 7: Описание</b>\n\n"
         "Введите описание (до 1000 символов).\n\n"
-        "💡 <i>Напишите описание и нажмите кнопку ниже, чтобы ИИ помог его улучшить.</i>",
-        reply_markup=get_description_ai_keyboard()
+        "💡 <i>После ввода вы сможете улучшить описание с помощью ИИ.</i>"
     )
 
 
@@ -431,12 +429,17 @@ async def process_description(message: Message, state: FSMContext):
         await checking_msg.delete()
         # Fail-open: продолжаем, если LLM недоступен
 
-    await state.update_data(description=description)
+    # Сохраняем в pending для возможности улучшения
+    await state.update_data(pending_description=description)
+    await state.set_state(AdCreation.description_ai_pending)
 
-    display = description[:50] + "..." if len(description) > 50 else description
-    await message.answer(f"✅ <b>Описание:</b> {display}")
-
-    await _go_to_next_after_description(message, state)
+    from bot.keyboards.inline import get_description_confirm_keyboard
+    await message.answer(
+        f"📝 <b>Ваше описание:</b>\n\n"
+        f"<code>{description}</code>\n\n"
+        f"Выберите действие:",
+        reply_markup=get_description_confirm_keyboard()
+    )
 
 
 async def _go_to_next_after_description(message: Message, state: FSMContext):
@@ -500,6 +503,28 @@ async def ai_improve_description_callback(callback: CallbackQuery, state: FSMCon
         logger.error(f"[AI_DESC] Ошибка: {e}")
         await processing_msg.delete()
         await callback.message.answer("❌ Произошла ошибка, попробуйте позже.")
+
+
+@router.callback_query(F.data == "desc_confirm_next")
+async def desc_confirm_next_callback(callback: CallbackQuery, state: FSMContext):
+    """Подтвердить описание и перейти дальше"""
+    logger.info(f"[DESC] desc_confirm_next, user={callback.from_user.id}")
+    await callback.answer()
+
+    data = await state.get_data()
+    description = data.get('pending_description')
+
+    if not description:
+        await callback.message.answer("❌ Описание не найдено.")
+        return
+
+    # Сохраняем как основное описание
+    await state.update_data(description=description, pending_description=None)
+
+    display = description[:50] + "..." if len(description) > 50 else description
+    await callback.message.answer(f"✅ <b>Описание:</b> {display}")
+
+    await _go_to_next_after_description(callback.message, state)
 
 
 @router.callback_query(F.data == "ai_desc_use")
