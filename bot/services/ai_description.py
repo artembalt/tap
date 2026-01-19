@@ -103,7 +103,10 @@ class AIDescriptionService:
         category: str = None,
         subcategory: str = None,
     ) -> AIDescriptionResult:
-        """Вызов Claude API через официальный SDK"""
+        """Вызов Claude API через subprocess (изоляция от окружения бота)"""
+        import asyncio
+        import subprocess
+        import json
 
         # Формируем контекст
         context_parts = []
@@ -123,36 +126,63 @@ class AIDescriptionService:
 
 Улучши это описание:"""
 
-        client = self._get_client()
+        # Python скрипт для выполнения в subprocess
+        script = f'''
+import anthropic
+import json
 
-        message = await client.messages.create(
-            model=self.model,
-            max_tokens=512,
-            system=IMPROVE_DESCRIPTION_PROMPT,
-            messages=[
-                {"role": "user", "content": user_message}
-            ]
-        )
+client = anthropic.Anthropic(api_key="{self.api_key}")
+try:
+    message = client.messages.create(
+        model="{self.model}",
+        max_tokens=512,
+        system="""{IMPROVE_DESCRIPTION_PROMPT}""",
+        messages=[{{"role": "user", "content": """{user_message.replace('"', '\\"')}"""}}]
+    )
+    result = {{"success": True, "text": message.content[0].text}}
+except Exception as e:
+    result = {{"success": False, "error": str(e)}}
+print(json.dumps(result, ensure_ascii=False))
+'''
 
-        # Извлекаем текст из ответа
-        content = message.content[0].text.strip() if message.content else ""
-
-        if not content:
-            return AIDescriptionResult(
-                success=False,
-                error="Не удалось улучшить описание"
+        try:
+            # Запускаем в subprocess для изоляции
+            proc = await asyncio.create_subprocess_exec(
+                '/home/telegram-ads-platform/tramp/bin/python', '-c', script,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
             )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
 
-        # Обрезаем если слишком длинное
-        if len(content) > 1000:
-            content = content[:997] + "..."
+            if proc.returncode != 0:
+                logger.error(f"[AI_DESC] Subprocess error: {stderr.decode()}")
+                return AIDescriptionResult(success=False, error="Ошибка генерации")
 
-        logger.info(f"[AI_DESC] Успешно улучшено: {len(original_text)} -> {len(content)} символов")
+            result = json.loads(stdout.decode())
 
-        return AIDescriptionResult(
-            success=True,
-            improved_text=content
-        )
+            if not result.get("success"):
+                logger.error(f"[AI_DESC] API error: {result.get('error')}")
+                return AIDescriptionResult(success=False, error="Сервис временно недоступен")
+
+            content = result.get("text", "").strip()
+
+            if not content:
+                return AIDescriptionResult(success=False, error="Не удалось улучшить описание")
+
+            # Обрезаем если слишком длинное
+            if len(content) > 1000:
+                content = content[:997] + "..."
+
+            logger.info(f"[AI_DESC] Успешно улучшено: {len(original_text)} -> {len(content)} символов")
+
+            return AIDescriptionResult(success=True, improved_text=content)
+
+        except asyncio.TimeoutError:
+            logger.error("[AI_DESC] Timeout")
+            return AIDescriptionResult(success=False, error="Превышено время ожидания")
+        except Exception as e:
+            logger.error(f"[AI_DESC] Error: {e}")
+            return AIDescriptionResult(success=False, error="Сервис временно недоступен")
 
 
 # Глобальный экземпляр сервиса
