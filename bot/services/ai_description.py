@@ -114,7 +114,8 @@ class AIDescriptionService:
         headers = {
             "Content-Type": "application/json",
             "x-api-key": self.api_key,
-            "anthropic-version": "2023-06-01"
+            "anthropic-version": "2023-06-01",
+            "User-Agent": "TelegramAdsBot/1.0"
         }
 
         # Формируем контекст
