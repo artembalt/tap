@@ -75,6 +75,10 @@ async def check_photos_for_forbidden_text(
 
     for i, photo_id in enumerate(photo_ids):
         try:
+            # Задержка между запросами (Yandex Vision: 1 req/sec limit)
+            if i > 0:
+                await asyncio.sleep(1.2)
+
             # Скачиваем фото
             file = await bot.get_file(photo_id)
             file_data = await bot.download_file(file.file_path)
@@ -96,19 +100,15 @@ async def check_photos_for_forbidden_text(
                 continue  # Нет текста на фото
 
             recognized_text = ocr_result.text.strip()
-            logger.info(f"[OCR] Фото {i+1}: распознано {len(recognized_text)} символов")
+            logger.info(f"[OCR] Фото {i+1}: распознано {len(recognized_text)} символов, текст: {recognized_text[:100]}")
 
             # Проверяем текст через rule-based фильтр
-            is_valid, rejection_reason = validate_content(
-                recognized_text,
-                content_type="photo_text",
-                category=category,
-                subcategory=subcategory
-            )
+            filter_result = validate_content(recognized_text)
 
-            if not is_valid:
-                logger.warning(f"[OCR] Фото {i+1} содержит запрещённый текст: {rejection_reason}")
-                return False, f"На фото {i+1} обнаружен запрещённый контент:\n{rejection_reason}"
+            if not filter_result.is_valid:
+                rejection = filter_result.rejection_reason or "Запрещённый контент"
+                logger.warning(f"[OCR] Фото {i+1} содержит запрещённый текст: {rejection}")
+                return False, f"На фото {i+1} обнаружен запрещённый контент:\n{rejection}"
 
         except Exception as e:
             logger.error(f"[OCR] Ошибка при проверке фото {i+1}: {e}")
