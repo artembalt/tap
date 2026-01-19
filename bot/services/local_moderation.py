@@ -36,21 +36,16 @@ class LocalModerationResult:
 
 
 def _get_ocr_model():
-    """Ленивая загрузка PaddleOCR"""
+    """Ленивая загрузка EasyOCR"""
     global _ocr_model
     if _ocr_model is None:
         try:
-            # Отключаем логи PaddlePaddle
-            import logging as log
-            log.getLogger('ppocr').setLevel(log.WARNING)
-            log.getLogger('paddle').setLevel(log.WARNING)
-
-            from paddleocr import PaddleOCR
-            # Минимальные параметры для новой версии API
-            _ocr_model = PaddleOCR(lang='ru')
-            logger.info("[LocalMod] PaddleOCR загружен")
+            import easyocr
+            # Русский + английский языки, без GPU
+            _ocr_model = easyocr.Reader(['ru', 'en'], gpu=False, verbose=False)
+            logger.info("[LocalMod] EasyOCR загружен")
         except Exception as e:
-            logger.error(f"[LocalMod] Ошибка загрузки PaddleOCR: {e}")
+            logger.error(f"[LocalMod] Ошибка загрузки EasyOCR: {e}")
     return _ocr_model
 
 
@@ -68,9 +63,9 @@ def _get_nsfw_detector():
 
 
 def _recognize_text_sync(image_bytes: bytes) -> str:
-    """Синхронное распознавание текста (для ThreadPool)"""
-    ocr = _get_ocr_model()
-    if ocr is None:
+    """Синхронное распознавание текста через EasyOCR (для ThreadPool)"""
+    reader = _get_ocr_model()
+    if reader is None:
         return ""
 
     try:
@@ -81,20 +76,18 @@ def _recognize_text_sync(image_bytes: bytes) -> str:
         image = Image.open(BytesIO(image_bytes))
         image_np = np.array(image)
 
-        # Распознаём текст
-        result = ocr.ocr(image_np, cls=True)
+        # Распознаём текст через EasyOCR
+        # Формат результата: [(bbox, text, confidence), ...]
+        results = reader.readtext(image_np)
 
-        if not result or not result[0]:
+        if not results:
             return ""
 
-        # Собираем весь текст
+        # Собираем весь текст с уверенностью > 0.3
         texts = []
-        for line in result[0]:
-            if line and len(line) >= 2:
-                text = line[1][0]  # Текст
-                confidence = line[1][1]  # Уверенность
-                if confidence > 0.5:  # Фильтруем низкую уверенность
-                    texts.append(text)
+        for bbox, text, confidence in results:
+            if confidence > 0.3:
+                texts.append(text)
 
         return " ".join(texts)
 
@@ -291,7 +284,7 @@ def preload_models():
 def is_available() -> bool:
     """Проверить, доступны ли локальные модели"""
     try:
-        from paddleocr import PaddleOCR
+        import easyocr
         from nudenet import NudeDetector
         return True
     except ImportError:
