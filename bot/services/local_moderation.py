@@ -43,15 +43,11 @@ def _get_ocr_model():
             # Отключаем логи PaddlePaddle
             import logging as log
             log.getLogger('ppocr').setLevel(log.WARNING)
+            log.getLogger('paddle').setLevel(log.WARNING)
 
             from paddleocr import PaddleOCR
-            # use_angle_cls=True для текста под углом
-            # lang='ru' для русского языка
-            _ocr_model = PaddleOCR(
-                use_angle_cls=True,
-                lang='ru',
-                use_gpu=False,
-            )
+            # Минимальные параметры для новой версии API
+            _ocr_model = PaddleOCR(lang='ru')
             logger.info("[LocalMod] PaddleOCR загружен")
         except Exception as e:
             logger.error(f"[LocalMod] Ошибка загрузки PaddleOCR: {e}")
