@@ -1,10 +1,11 @@
 # bot/services/ai_description.py
 """
-Сервис улучшения описаний объявлений с помощью Claude AI.
-Использует официальный Anthropic SDK.
+Сервис улучшения описаний объявлений с помощью YandexGPT.
 """
 
 import logging
+import json
+import httpx
 from typing import Optional
 from dataclasses import dataclass
 
@@ -39,29 +40,18 @@ IMPROVE_DESCRIPTION_PROMPT = """Ты — помощник для написан�
 
 
 class AIDescriptionService:
-    """Сервис улучшения описаний через Claude API (официальный SDK)"""
+    """Сервис улучшения описаний через YandexGPT API"""
 
     def __init__(
         self,
         api_key: str,
-        model: str = "claude-3-haiku-20240307",
+        folder_id: str,
+        model: str = "yandexgpt-lite",
     ):
         self.api_key = api_key
+        self.folder_id = folder_id
         self.model = model
-        self._client = None
-
-    def _get_client(self):
-        """Ленивая инициализация клиента"""
-        if self._client is None:
-            import anthropic
-            import httpx
-            # Явно создаём httpx клиент чтобы избежать конфликтов с aiogram
-            http_client = httpx.AsyncClient(timeout=30.0)
-            self._client = anthropic.AsyncAnthropic(
-                api_key=self.api_key,
-                http_client=http_client
-            )
-        return self._client
+        self.api_url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
 
     async def improve_description(
         self,
@@ -73,8 +63,8 @@ class AIDescriptionService:
         """
         Улучшить описание объявления.
         """
-        if not self.api_key:
-            logger.warning("[AI_DESC] API ключ не настроен")
+        if not self.api_key or not self.folder_id:
+            logger.warning("[AI_DESC] YandexGPT API не настроен")
             return AIDescriptionResult(
                 success=False,
                 error="Функция временно недоступна"
@@ -87,7 +77,7 @@ class AIDescriptionService:
             )
 
         try:
-            result = await self._call_claude(original_text, title, category, subcategory)
+            result = await self._call_yandexgpt(original_text, title, category, subcategory)
             return result
         except Exception as e:
             logger.error(f"[AI_DESC] Ошибка: {type(e).__name__}: {e}")
@@ -96,17 +86,19 @@ class AIDescriptionService:
                 error="Сервис временно недоступен, попробуйте позже"
             )
 
-    async def _call_claude(
+    async def _call_yandexgpt(
         self,
         original_text: str,
         title: str = None,
         category: str = None,
         subcategory: str = None,
     ) -> AIDescriptionResult:
-        """Вызов Claude API через subprocess (изоляция от окружения бота)"""
-        import asyncio
-        import subprocess
-        import json
+        """Вызов YandexGPT API"""
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Api-Key {self.api_key}",
+            "x-folder-id": self.folder_id
+        }
 
         # Формируем контекст
         context_parts = []
@@ -126,69 +118,59 @@ class AIDescriptionService:
 
 Улучши это описание:"""
 
-        # Используем json.dumps для безопасной сериализации строк
-        user_message_json = json.dumps(user_message, ensure_ascii=False)
-        system_prompt_json = json.dumps(IMPROVE_DESCRIPTION_PROMPT, ensure_ascii=False)
+        payload = {
+            "modelUri": f"gpt://{self.folder_id}/{self.model}/latest",
+            "completionOptions": {
+                "stream": False,
+                "temperature": 0.7,  # Немного креативности для улучшения текста
+                "maxTokens": 512
+            },
+            "messages": [
+                {
+                    "role": "system",
+                    "text": IMPROVE_DESCRIPTION_PROMPT
+                },
+                {
+                    "role": "user",
+                    "text": user_message
+                }
+            ]
+        }
 
-        # Python скрипт для выполнения в subprocess
-        script = f'''
-import anthropic
-import json
-
-client = anthropic.Anthropic(api_key="{self.api_key}")
-try:
-    message = client.messages.create(
-        model="{self.model}",
-        max_tokens=512,
-        system={system_prompt_json},
-        messages=[{{"role": "user", "content": {user_message_json}}}]
-    )
-    result = {{"success": True, "text": message.content[0].text}}
-except Exception as e:
-    result = {{"success": False, "error": str(e)}}
-print(json.dumps(result, ensure_ascii=False))
-'''
-
-        try:
-            # Запускаем в subprocess для изоляции
-            # Прокси нужен! Сервер в RU, а Anthropic не работает в RU
-            # Прокси выходит из DE — там API работает
-            proc = await asyncio.create_subprocess_exec(
-                '/home/telegram-ads-platform/tramp/bin/python', '-c', script,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                self.api_url,
+                headers=headers,
+                json=payload
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30.0)
 
-            if proc.returncode != 0:
-                logger.error(f"[AI_DESC] Subprocess error: {stderr.decode()}")
+            if response.status_code >= 400:
+                response_body = response.text
+                logger.error(f"[AI_DESC] API error {response.status_code}: {response_body[:200]}")
                 return AIDescriptionResult(success=False, error="Ошибка генерации")
 
-            result = json.loads(stdout.decode())
+            data = response.json()
 
-            if not result.get("success"):
-                logger.error(f"[AI_DESC] API error: {result.get('error')}")
-                return AIDescriptionResult(success=False, error="Сервис временно недоступен")
+        # Парсим ответ YandexGPT
+        # Формат: {"result": {"alternatives": [{"message": {"role": "assistant", "text": "..."}}]}}
+        try:
+            content = data["result"]["alternatives"][0]["message"]["text"]
+        except (KeyError, IndexError):
+            logger.warning(f"[AI_DESC] Неожиданный формат ответа: {data}")
+            return AIDescriptionResult(success=False, error="Не удалось улучшить описание")
 
-            content = result.get("text", "").strip()
+        content = content.strip()
 
-            if not content:
-                return AIDescriptionResult(success=False, error="Не удалось улучшить описание")
+        if not content:
+            return AIDescriptionResult(success=False, error="Не удалось улучшить описание")
 
-            # Обрезаем если слишком длинное
-            if len(content) > 1000:
-                content = content[:997] + "..."
+        # Обрезаем если слишком длинное
+        if len(content) > 1000:
+            content = content[:997] + "..."
 
-            logger.info(f"[AI_DESC] Успешно улучшено: {len(original_text)} -> {len(content)} символов")
+        logger.info(f"[AI_DESC] Успешно улучшено: {len(original_text)} -> {len(content)} символов")
 
-            return AIDescriptionResult(success=True, improved_text=content)
-
-        except asyncio.TimeoutError:
-            logger.error("[AI_DESC] Timeout")
-            return AIDescriptionResult(success=False, error="Превышено время ожидания")
-        except Exception as e:
-            logger.error(f"[AI_DESC] Error: {e}")
-            return AIDescriptionResult(success=False, error="Сервис временно недоступен")
+        return AIDescriptionResult(success=True, improved_text=content)
 
 
 # Глобальный экземпляр сервиса
@@ -201,17 +183,15 @@ def get_ai_description_service() -> Optional[AIDescriptionService]:
     if _service is None:
         try:
             from bot.config import settings
-            # Используем отдельный ключ для AI-описаний, если указан
-            api_key = settings.AI_DESCRIPTION_API_KEY or settings.CLAUDE_API_KEY
-            if api_key and settings.AI_DESCRIPTION_ENABLED:
+            if settings.YANDEX_GPT_API_KEY and settings.YANDEX_GPT_FOLDER_ID and settings.AI_DESCRIPTION_ENABLED:
                 _service = AIDescriptionService(
-                    api_key=api_key,
-                    model=settings.CLAUDE_MODEL,
+                    api_key=settings.YANDEX_GPT_API_KEY,
+                    folder_id=settings.YANDEX_GPT_FOLDER_ID,
+                    model=settings.YANDEX_GPT_MODEL,
                 )
-                key_source = "AI_DESCRIPTION_API_KEY" if settings.AI_DESCRIPTION_API_KEY else "CLAUDE_API_KEY"
-                logger.info(f"[AI_DESC] Сервис инициализирован (model={settings.CLAUDE_MODEL}, key={key_source})")
+                logger.info(f"[AI_DESC] Сервис инициализирован (model={settings.YANDEX_GPT_MODEL})")
             else:
-                logger.info("[AI_DESC] Сервис отключен")
+                logger.info("[AI_DESC] Сервис отключен (не настроен YandexGPT)")
         except Exception as e:
             logger.error(f"[AI_DESC] Ошибка инициализации: {e}")
     return _service

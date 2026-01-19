@@ -1,6 +1,6 @@
 # bot/utils/llm_moderation.py
 """
-LLM-модерация объявлений с использованием Claude API.
+LLM-модерация объявлений с использованием YandexGPT API.
 Второй уровень проверки после rule-based фильтра.
 """
 
@@ -81,19 +81,21 @@ MODERATION_SYSTEM_PROMPT = """Ты — модератор объявлений �
 }"""
 
 
-class ClaudeModerator:
-    """Модератор на базе Claude API"""
+class YandexGPTModerator:
+    """Модератор на базе YandexGPT API"""
 
     def __init__(
         self,
         api_key: str,
-        model: str = "claude-3-haiku-20240307",
+        folder_id: str,
+        model: str = "yandexgpt-lite",
         threshold: float = 0.7
     ):
         self.api_key = api_key
+        self.folder_id = folder_id
         self.model = model
         self.threshold = threshold
-        self.api_url = "https://api.anthropic.com/v1/messages"
+        self.api_url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
 
         # Circuit breaker state
         self._error_count = 0
@@ -146,27 +148,26 @@ class ClaudeModerator:
             error_type = {
                 400: "Bad Request (неверный запрос)",
                 401: "Unauthorized (неверный API ключ)",
-                403: "Forbidden (доступ запрещён — проверьте API ключ и лимиты)",
+                403: "Forbidden (доступ запрещён)",
                 404: "Not Found (модель не найдена)",
                 429: "Rate Limit (превышен лимит запросов)",
-                500: "Server Error (ошибка сервера Anthropic)",
+                500: "Server Error (ошибка сервера YandexGPT)",
                 502: "Bad Gateway",
                 503: "Service Unavailable (API временно недоступен)",
-                529: "Overloaded (API перегружен)",
             }.get(status_code, f"HTTP {status_code}")
             parts.append(f"Ошибка API: {error_type}")
         else:
             parts.append(f"Ошибка: {type(error).__name__}")
 
-        # Добавляем тело ответа с ошибкой (там обычно есть детали)
+        # Добавляем тело ответа с ошибкой
         if response_body:
             try:
                 error_data = json.loads(response_body)
                 if "error" in error_data:
                     err = error_data["error"]
-                    err_type = err.get("type", "unknown")
+                    err_code = err.get("code", "unknown")
                     err_msg = err.get("message", "")
-                    parts.append(f"Тип: {err_type}")
+                    parts.append(f"Код: {err_code}")
                     if err_msg:
                         parts.append(f"Сообщение: {err_msg[:200]}")
             except json.JSONDecodeError:
@@ -198,8 +199,8 @@ class ClaudeModerator:
         Returns:
             LLMModerationResult с результатом модерации
         """
-        if not self.api_key:
-            logger.warning("[LLM] Claude API key не настроен, пропускаем LLM-модерацию")
+        if not self.api_key or not self.folder_id:
+            logger.warning("[LLM] YandexGPT API не настроен, пропускаем LLM-модерацию")
             return LLMModerationResult(
                 is_safe=True,
                 category=ModerationCategory.SAFE,
@@ -225,11 +226,11 @@ class ClaudeModerator:
             )
 
         try:
-            result = await self._call_claude(text, ad_category, ad_subcategory, content_type)
+            result = await self._call_yandexgpt(text, ad_category, ad_subcategory, content_type)
             self._record_success()
             return result
         except httpx.HTTPStatusError:
-            # HTTP ошибки уже залогированы в _call_claude
+            # HTTP ошибки уже залогированы в _call_yandexgpt
             return LLMModerationResult(
                 is_safe=True,
                 category=ModerationCategory.SAFE,
@@ -255,19 +256,18 @@ class ClaudeModerator:
                 reason=f"Ошибка LLM: {str(e)[:50]}"
             )
 
-    async def _call_claude(
+    async def _call_yandexgpt(
         self,
         text: str,
         ad_category: str = None,
         ad_subcategory: str = None,
         content_type: str = None
     ) -> LLMModerationResult:
-        """Вызов Claude API"""
+        """Вызов YandexGPT API"""
         headers = {
             "Content-Type": "application/json",
-            "x-api-key": self.api_key,
-            "anthropic-version": "2023-06-01",
-            "User-Agent": "TelegramAdsBot/1.0"
+            "Authorization": f"Api-Key {self.api_key}",
+            "x-folder-id": self.folder_id
         }
 
         # Формируем запрос с категорией и рубрикой для контекста
@@ -299,18 +299,25 @@ class ClaudeModerator:
             user_content = f"Проверь это:{content_type_context}\n\n{text[:2000]}"
 
         payload = {
-            "model": self.model,
-            "max_tokens": 256,
-            "system": MODERATION_SYSTEM_PROMPT,
+            "modelUri": f"gpt://{self.folder_id}/{self.model}/latest",
+            "completionOptions": {
+                "stream": False,
+                "temperature": 0.1,  # Низкая температура для стабильных результатов
+                "maxTokens": 256
+            },
             "messages": [
                 {
+                    "role": "system",
+                    "text": MODERATION_SYSTEM_PROMPT
+                },
+                {
                     "role": "user",
-                    "content": user_content
+                    "text": user_content
                 }
             ]
         }
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(
                 self.api_url,
                 headers=headers,
@@ -330,12 +337,23 @@ class ClaudeModerator:
 
             data = response.json()
 
-        # Парсим ответ
-        content = data.get("content", [{}])[0].get("text", "")
+        # Парсим ответ YandexGPT
+        # Формат: {"result": {"alternatives": [{"message": {"role": "assistant", "text": "..."}}]}}
+        try:
+            content = data["result"]["alternatives"][0]["message"]["text"]
+        except (KeyError, IndexError):
+            logger.warning(f"[LLM] Неожиданный формат ответа: {data}")
+            return LLMModerationResult(
+                is_safe=True,
+                category=ModerationCategory.SAFE,
+                confidence=0.0,
+                reason="Ошибка парсинга ответа"
+            )
+
         return self._parse_response(content, data)
 
     def _parse_response(self, content: str, raw: Dict) -> LLMModerationResult:
-        """Парсинг JSON ответа от Claude"""
+        """Парсинг JSON ответа от YandexGPT"""
         try:
             # Извлекаем JSON из ответа
             json_start = content.find("{")
@@ -382,24 +400,25 @@ class ClaudeModerator:
 
 
 # Глобальный экземпляр модератора (инициализируется при первом использовании)
-_moderator: Optional[ClaudeModerator] = None
+_moderator: Optional[YandexGPTModerator] = None
 
 
-def get_moderator() -> Optional[ClaudeModerator]:
+def get_moderator() -> Optional[YandexGPTModerator]:
     """Получить экземпляр модератора"""
     global _moderator
     if _moderator is None:
         try:
             from bot.config import settings
-            if settings.CLAUDE_API_KEY and settings.LLM_MODERATION_ENABLED:
-                _moderator = ClaudeModerator(
-                    api_key=settings.CLAUDE_API_KEY,
-                    model=settings.CLAUDE_MODEL,
+            if settings.YANDEX_GPT_API_KEY and settings.YANDEX_GPT_FOLDER_ID and settings.LLM_MODERATION_ENABLED:
+                _moderator = YandexGPTModerator(
+                    api_key=settings.YANDEX_GPT_API_KEY,
+                    folder_id=settings.YANDEX_GPT_FOLDER_ID,
+                    model=settings.YANDEX_GPT_MODEL,
                     threshold=settings.LLM_MODERATION_THRESHOLD
                 )
-                logger.info(f"[LLM] Claude модератор инициализирован (model={settings.CLAUDE_MODEL})")
+                logger.info(f"[LLM] YandexGPT модератор инициализирован (model={settings.YANDEX_GPT_MODEL})")
             else:
-                logger.info("[LLM] LLM-модерация отключена")
+                logger.info("[LLM] LLM-модерация отключена (не настроен YandexGPT)")
         except Exception as e:
             logger.error(f"[LLM] Ошибка инициализации модератора: {e}")
     return _moderator

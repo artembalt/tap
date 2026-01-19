@@ -101,16 +101,18 @@ class Settings:
     # API ключи для внешних сервисов
     GOOGLE_MAPS_API_KEY: str = os.getenv("GOOGLE_MAPS_API_KEY", "")
 
-    # Claude API для LLM-модерации
-    CLAUDE_API_KEY: str = os.getenv("CLAUDE_API_KEY", "")
-    CLAUDE_MODEL: str = os.getenv("CLAUDE_MODEL", "claude-3-haiku-20240307")  # haiku для скорости/дешевизны
+    # YandexGPT API для LLM-модерации и AI-описаний
+    YANDEX_GPT_API_KEY: str = os.getenv("YANDEX_GPT_API_KEY", "")
+    YANDEX_GPT_FOLDER_ID: str = os.getenv("YANDEX_GPT_FOLDER_ID", "")
+    YANDEX_GPT_MODEL: str = os.getenv("YANDEX_GPT_MODEL", "yandexgpt-lite")  # yandexgpt-lite или yandexgpt
+
+    # LLM-модерация
     LLM_MODERATION_ENABLED: bool = os.getenv("LLM_MODERATION_ENABLED", "True").lower() == "true"
     LLM_MODERATION_THRESHOLD: float = float(os.getenv("LLM_MODERATION_THRESHOLD", "0.7"))  # 0-1
 
     # AI-улучшение описаний объявлений
     AI_DESCRIPTION_ENABLED: bool = os.getenv("AI_DESCRIPTION_ENABLED", "True").lower() == "true"
     AI_DESCRIPTION_DAILY_LIMIT: int = int(os.getenv("AI_DESCRIPTION_DAILY_LIMIT", "5"))  # Лимит генераций в день
-    AI_DESCRIPTION_API_KEY: str = os.getenv("AI_DESCRIPTION_API_KEY", "")  # Отдельный ключ для AI-описаний
     
     @property
     def database_url(self) -> str:
