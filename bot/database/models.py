@@ -34,13 +34,27 @@ class AccountType(str, Enum):
     BUSINESS = "business"
 
 class AdStatus(str, Enum):
+    """
+    Статусы объявлений:
+    - DRAFT: черновик (не опубликовано)
+    - PENDING: ожидает модерации
+    - ACTIVE: активное (опубликовано, срок не истёк)
+    - INACTIVE: не активное (срок публикации истёк)
+    - NEEDS_EDIT: требует редактирования (отклонено модератором)
+    - DELETED: удалено пользователем (хранится 6 месяцев)
+    - ARCHIVED: в архиве (старые удалённые, старше 6 месяцев)
+    - BANNED: заблокировано администратором
+    """
     DRAFT = "draft"
     PENDING = "pending"
     ACTIVE = "active"
-    REJECTED = "rejected"
-    ARCHIVED = "archived"
+    INACTIVE = "inactive"      # Новый: срок публикации истёк
+    NEEDS_EDIT = "needs_edit"  # Новый: требует редактирования после модерации
     DELETED = "deleted"
+    ARCHIVED = "archived"
     BANNED = "banned"
+    # Устаревший статус, оставлен для совместимости
+    REJECTED = "rejected"
 
 class AdType(str, Enum):
     SELL = "sell"

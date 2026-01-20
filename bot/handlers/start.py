@@ -8,7 +8,7 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart, Command, CommandObject
 from aiogram.fsm.context import FSMContext
-from aiogram.exceptions import TelegramNetworkError, TelegramAPIError
+from aiogram.exceptions import TelegramNetworkError, TelegramAPIError, TelegramBadRequest
 from sqlalchemy import select, func
 
 from bot.keyboards.inline import get_main_menu_keyboard, get_back_keyboard
@@ -157,6 +157,9 @@ async def _send_welcome(message: Message):
             "📍 Выберите нужный раздел:",
             reply_markup=get_main_menu_keyboard()
         )
+    except TelegramBadRequest as e:
+        # Игнорируем ошибки типа "chat not found" (несуществующий пользователь)
+        logger.debug(f"[START] Чат не найден: {e}")
     except TelegramNetworkError as e:
         logger.error(f"[START] Сетевая ошибка: {e}")
 
