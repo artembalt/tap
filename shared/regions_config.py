@@ -390,30 +390,36 @@ class RegionConfig:
     name: str
     main_channel: str
     menu_channel: str
+    archive_channel: str  # Приватный канал для хранения медиа неактивных объявлений
     categories: Dict[str, str]
-    
+
     @classmethod
     def get_region(cls, region_code: str) -> Optional['RegionConfig']:
         """Получить конфигурацию региона по коду"""
         if region_code not in REGIONS:
             return None
-            
+
         config = CHANNELS_CONFIG.get(region_code, {})
         return cls(
             code=region_code,
             name=REGIONS[region_code],
             main_channel=config.get("main", ""),
             menu_channel=config.get("menu", ""),
+            archive_channel=config.get("archive", ""),
             categories=config.get("categories", {})
         )
-    
+
     def get_channel_for_category(self, category: str) -> Optional[str]:
         """Получить канал для категории"""
         return self.categories.get(category)
-    
+
     def is_configured(self) -> bool:
         """Проверить, настроен ли регион"""
         return bool(self.main_channel and self.categories)
+
+    def has_archive_channel(self) -> bool:
+        """Проверить, настроен ли архивный канал"""
+        return bool(self.archive_channel)
 
 
 def get_price_for_service(service: str, region: str = None) -> int:

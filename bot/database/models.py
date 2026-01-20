@@ -229,6 +229,12 @@ class Ad(Base):
     channel_message_ids = Column(JSONB, default={})  # {"channel_id": message_id}
     published_at = Column(DateTime, nullable=True)
     expires_at = Column(DateTime, nullable=True)
+
+    # Архивный канал (для неактивных объявлений)
+    archive_message_ids = Column(JSONB, default={})  # {"archive_channel_id": [message_ids]}
+    archived_to_channel_at = Column(DateTime, nullable=True)  # Когда перемещено в архивный канал
+    republish_count = Column(Integer, default=0)  # Количество переопубликаций (для определения платности)
+    last_republished_at = Column(DateTime, nullable=True)  # Последняя переопубликация
     
     # Внешние ссылки (до 4 штук)
     # Формат: [{"title": "Название", "url": "https://..."}, ...]
@@ -263,6 +269,7 @@ class Ad(Base):
         Index('idx_ad_expires', 'expires_at'),
         Index('idx_ad_published', 'published_at'),
         Index('idx_ad_search', 'title', 'description'),  # Для поиска
+        Index('idx_ad_archived_to_channel', 'archived_to_channel_at'),  # Для поиска старых архивных
     )
 
 class Payment(Base):
