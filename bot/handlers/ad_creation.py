@@ -16,8 +16,6 @@ from bot.database.models import Ad, AdStatus, User
 from bot.utils.content_filter import (
     validate_content, validate_content_with_llm, get_rejection_message
 )
-from bot.services.vision_ocr import recognize_text_on_image, get_vision_ocr_service
-from bot.services.local_moderation import moderate_image, is_available as local_moderation_available
 from bot.utils.limits import can_create_ad, get_user_limits, get_ad_duration_days
 from shared.regions_config import (
     REGIONS, CITIES, CATEGORIES, SUBCATEGORIES, DEAL_TYPES,
@@ -49,93 +47,6 @@ async def send_with_retry(message: Message, text: str, reply_markup=None, max_re
             else:
                 logger.error(f"Не удалось отправить сообщение: {e}")
                 raise
-
-
-async def check_photos_for_forbidden_text(
-    bot: Bot,
-    photo_ids: list,
-    category: str = None,
-    subcategory: str = None
-) -> tuple[bool, str]:
-    """
-    Проверяет фото на наличие запрещённого контента.
-
-    Использует:
-    1. Локальную модерацию (PaddleOCR + NudeNet) — без лимитов, быстро
-    2. Yandex Vision OCR — как fallback если локальная недоступна
-
-    Returns:
-        (is_ok, error_message) - True если всё хорошо, иначе False и сообщение об ошибке
-    """
-    if not photo_ids:
-        return True, ""
-
-    # Определяем метод проверки
-    use_local = local_moderation_available()
-    use_cloud = get_vision_ocr_service() is not None
-
-    if not use_local and not use_cloud:
-        logger.debug("[PhotoCheck] Ни локальная модерация, ни OCR не настроены, пропускаем")
-        return True, ""
-
-    method = "local" if use_local else "cloud"
-    logger.info(f"[PhotoCheck] Проверяю {len(photo_ids)} фото ({method})")
-
-    for i, photo_id in enumerate(photo_ids):
-        try:
-            # Скачиваем фото
-            file = await bot.get_file(photo_id)
-            file_data = await bot.download_file(file.file_path)
-            image_bytes = file_data.read()
-
-            if use_local:
-                # === ЛОКАЛЬНАЯ МОДЕРАЦИЯ (PaddleOCR + NudeNet) ===
-                result = await moderate_image(
-                    image_bytes,
-                    check_nsfw=True,
-                    check_text=True,
-                    nsfw_threshold=0.6
-                )
-
-                # Проверка NSFW
-                if not result.is_safe:
-                    logger.warning(f"[PhotoCheck] Фото {i+1} NSFW: score={result.nsfw_score:.2f}, labels={result.nsfw_labels}")
-                    return False, f"На фото {i+1} обнаружен недопустимый контент (18+)"
-
-                # Проверка текста
-                if result.recognized_text and len(result.recognized_text.strip()) >= 3:
-                    filter_result = validate_content(result.recognized_text)
-                    if not filter_result.is_valid:
-                        rejection = filter_result.reason or "Запрещённый контент"
-                        logger.warning(f"[PhotoCheck] Фото {i+1} текст: {rejection}")
-                        return False, f"На фото {i+1} обнаружен запрещённый текст:\n{rejection}"
-
-            else:
-                # === YANDEX VISION OCR (fallback) ===
-                # Задержка для rate limit (1 req/sec)
-                if i > 0:
-                    await asyncio.sleep(1.2)
-
-                mime_type = "PNG" if file.file_path and file.file_path.endswith(".png") else "JPEG"
-                ocr_result = await recognize_text_on_image(image_bytes, mime_type)
-
-                if not ocr_result.success:
-                    logger.warning(f"[PhotoCheck] OCR ошибка фото {i+1}: {ocr_result.error}")
-                    continue
-
-                if ocr_result.text and len(ocr_result.text.strip()) >= 3:
-                    filter_result = validate_content(ocr_result.text.strip())
-                    if not filter_result.is_valid:
-                        rejection = filter_result.reason or "Запрещённый контент"
-                        logger.warning(f"[PhotoCheck] Фото {i+1} текст: {rejection}")
-                        return False, f"На фото {i+1} обнаружен запрещённый текст:\n{rejection}"
-
-        except Exception as e:
-            logger.error(f"[PhotoCheck] Ошибка фото {i+1}: {e}")
-            continue  # При ошибке пропускаем, не блокируем
-
-    logger.info("[PhotoCheck] Все фото прошли проверку")
-    return True, ""
 
 
 router = Router(name='ad_creation')
@@ -801,30 +712,6 @@ async def photos_done(callback: CallbackQuery, state: FSMContext):
 
     if not photos:
         await callback.message.answer("⚠️ Вы не загрузили ни одного фото. Загрузите хотя бы одно.")
-        return
-
-    # Проверяем фото на запрещённый контент (NSFW + текст)
-    spinner_msg = await callback.message.answer("⏳ <b>Проверяю фото...</b>")
-
-    photos_ok, photos_error = await check_photos_for_forbidden_text(
-        bot=callback.message.bot,
-        photo_ids=photos,
-        category=data.get('category'),
-        subcategory=data.get('subcategory')
-    )
-
-    await spinner_msg.delete()
-
-    if not photos_ok:
-        # Фото отклонены — очищаем список и просим загрузить заново
-        await state.update_data(photos=[])
-
-        from bot.keyboards.inline import get_photo_skip_keyboard
-        await callback.message.answer(
-            f"❌ <b>Фото отклонены</b>\n\n{photos_error}\n\n"
-            "📸 Загрузите новые фото (без запрещённого контента):",
-            reply_markup=get_photo_skip_keyboard()
-        )
         return
 
     await callback.message.answer(f"✅ <b>Фото:</b> {count} шт.")
