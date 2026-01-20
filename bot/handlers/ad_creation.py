@@ -816,12 +816,14 @@ async def photos_done(callback: CallbackQuery, state: FSMContext):
     await spinner_msg.delete()
 
     if not photos_ok:
-        # Фото отклонены — просим заменить
-        from bot.keyboards.inline import get_photo_done_keyboard
+        # Фото отклонены — очищаем список и просим загрузить заново
+        await state.update_data(photos=[])
+
+        from bot.keyboards.inline import get_photo_skip_keyboard
         await callback.message.answer(
             f"❌ <b>Фото отклонены</b>\n\n{photos_error}\n\n"
-            "Удалите проблемные фото и загрузите новые, затем нажмите <b>Далее</b>.",
-            reply_markup=get_photo_done_keyboard()
+            "📸 Загрузите новые фото (без запрещённого контента):",
+            reply_markup=get_photo_skip_keyboard()
         )
         return
 
