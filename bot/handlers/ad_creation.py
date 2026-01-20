@@ -817,11 +817,11 @@ async def photos_done(callback: CallbackQuery, state: FSMContext):
 
     if not photos_ok:
         # Фото отклонены — просим заменить
-        from bot.keyboards.inline import get_photos_keyboard
+        from bot.keyboards.inline import get_photo_done_keyboard
         await callback.message.answer(
             f"❌ <b>Фото отклонены</b>\n\n{photos_error}\n\n"
-            "Пожалуйста, удалите проблемные фото и загрузите новые.",
-            reply_markup=get_photos_keyboard(count)
+            "Удалите проблемные фото и загрузите новые, затем нажмите <b>Далее</b>.",
+            reply_markup=get_photo_done_keyboard()
         )
         return
 
