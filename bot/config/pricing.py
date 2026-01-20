@@ -24,7 +24,7 @@ ACCOUNT_TYPES: Dict[str, Dict[str, Any]] = {
         "duration_days": None,  # Бессрочно
         "limits": {
             "max_active_ads": 100,           # Макс. активных объявлений
-            "ad_duration_days": 30,          # Срок публикации по умолчанию
+            "ad_duration_days": 1,           # Срок публикации (ТЕСТ: 1 день)
             "max_regions_per_ad": 1,         # Регионов на объявление
             "max_links_per_ad": 1,           # Бесплатных ссылок
             "max_photos_per_ad": 5,          # Фото в объявлении
