@@ -106,7 +106,7 @@ async def check_photos_for_forbidden_text(
                 if result.recognized_text and len(result.recognized_text.strip()) >= 3:
                     filter_result = validate_content(result.recognized_text)
                     if not filter_result.is_valid:
-                        rejection = filter_result.rejection_reason or "Запрещённый контент"
+                        rejection = filter_result.reason or "Запрещённый контент"
                         logger.warning(f"[PhotoCheck] Фото {i+1} текст: {rejection}")
                         return False, f"На фото {i+1} обнаружен запрещённый текст:\n{rejection}"
 
@@ -126,7 +126,7 @@ async def check_photos_for_forbidden_text(
                 if ocr_result.text and len(ocr_result.text.strip()) >= 3:
                     filter_result = validate_content(ocr_result.text.strip())
                     if not filter_result.is_valid:
-                        rejection = filter_result.rejection_reason or "Запрещённый контент"
+                        rejection = filter_result.reason or "Запрещённый контент"
                         logger.warning(f"[PhotoCheck] Фото {i+1} текст: {rejection}")
                         return False, f"На фото {i+1} обнаружен запрещённый текст:\n{rejection}"
 
