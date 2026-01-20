@@ -10,7 +10,7 @@
 - **Система архивных каналов для хранения медиа** — решена проблема хранения фото неактивных объявлений
   - Архивный канал на каждый регион (`shared/regions_config.py`)
   - Поля в модели Ad: `archive_message_ids`, `archived_to_channel_at`, `republish_count`, `last_republished_at`
-  - Миграция: `alembic/versions/20260120_add_archive_fields.py`
+  - Миграция: `migrations/versions/20260120_add_archive_fields.py`
 
 - **Сервис управления жизненным циклом** (`bot/services/ad_lifecycle.py`)
   - `move_to_archive()` — перемещение в архивный канал при истечении срока
