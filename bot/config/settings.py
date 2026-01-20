@@ -106,9 +106,6 @@ class Settings:
     YANDEX_GPT_FOLDER_ID: str = os.getenv("YANDEX_GPT_FOLDER_ID", "")
     YANDEX_GPT_MODEL: str = os.getenv("YANDEX_GPT_MODEL", "yandexgpt-lite")  # yandexgpt-lite или yandexgpt
 
-    # Yandex Vision OCR для распознавания текста на фото
-    YANDEX_VISION_API_KEY: str = os.getenv("YANDEX_VISION_API_KEY", "")
-
     # LLM-модерация
     LLM_MODERATION_ENABLED: bool = os.getenv("LLM_MODERATION_ENABLED", "True").lower() == "true"
     LLM_MODERATION_THRESHOLD: float = float(os.getenv("LLM_MODERATION_THRESHOLD", "0.7"))  # 0-1
