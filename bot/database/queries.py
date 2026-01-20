@@ -178,28 +178,32 @@ class AdQueries:
     
     @staticmethod
     async def get_user_ads(
-        telegram_id: int, 
+        telegram_id: int,
         status: Optional[str] = None,
-        limit: int = 10,  # УМЕНЬШЕНО с 50 до 10!
+        limit: int = 10,
         offset: int = 0
     ) -> List[Ad]:
-        """Получить объявления пользователя с пагинацией"""
+        """
+        Получить объявления пользователя с пагинацией.
+        Включает все видимые пользователю объявления.
+        """
         try:
             async with get_db_session() as session:
                 stmt = select(Ad).where(Ad.user_id == telegram_id)
-                
+
                 if status:
                     stmt = stmt.where(Ad.status == status)
                 else:
-                    # По умолчанию показываем активные, на модерации и архивные
+                    # По умолчанию показываем все видимые пользователю
                     stmt = stmt.where(Ad.status.in_([
-                        AdStatus.ACTIVE.value, 
+                        AdStatus.ACTIVE.value,
                         AdStatus.PENDING.value,
-                        AdStatus.ARCHIVED.value
+                        AdStatus.INACTIVE.value,   # Неактивные (срок истёк)
+                        AdStatus.NEEDS_EDIT.value,  # Требует редактирования
                     ]))
-                
+
                 stmt = stmt.order_by(Ad.created_at.desc()).limit(limit).offset(offset)
-                
+
                 result = await session.execute(stmt)
                 return list(result.scalars().all())
         except Exception as e:
@@ -210,7 +214,8 @@ class AdQueries:
     async def get_user_ads_count(telegram_id: int) -> int:
         """
         Получить количество объявлений пользователя (быстрый запрос COUNT).
-        Используется для пагинации.
+        Используется для пагинации в "Мои объявления".
+        Включает все видимые пользователю объявления (кроме полностью удалённых).
         """
         try:
             async with get_db_session() as session:
@@ -220,9 +225,10 @@ class AdQueries:
                         and_(
                             Ad.user_id == telegram_id,
                             Ad.status.in_([
-                                AdStatus.ACTIVE.value, 
+                                AdStatus.ACTIVE.value,
                                 AdStatus.PENDING.value,
-                                AdStatus.ARCHIVED.value
+                                AdStatus.INACTIVE.value,  # Неактивные (срок истёк)
+                                AdStatus.NEEDS_EDIT.value,  # Требует редактирования
                             ])
                         )
                     )
