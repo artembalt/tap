@@ -248,7 +248,8 @@ class Ad(Base):
     # Временные метки
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
+    deleted_at = Column(DateTime, nullable=True)  # Когда удалено пользователем
+
     # Отношения
     user = relationship("User", back_populates="ads")
     favorited_by = relationship("User", secondary=ad_favorites, back_populates="favorites")
@@ -563,4 +564,55 @@ class UserServicePurchase(Base):
         Index('idx_user_service_ad', 'ad_id'),
         Index('idx_user_service_active', 'is_active'),
         Index('idx_user_service_expires', 'expires_at'),
+    )
+
+
+class ArchivedAd(Base):
+    """
+    Архив удалённых объявлений.
+    Сюда перемещаются объявления со статусом DELETED старше 6 месяцев.
+    Хранятся бессрочно для истории и возможного восстановления.
+    """
+    __tablename__ = 'archived_ads'
+
+    id = Column(UUID(as_uuid=True), primary_key=True)
+    user_id = Column(BigInteger, nullable=False, index=True)
+
+    # Основная информация (копия из Ad)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=False)
+    price = Column(Float, nullable=True)
+    currency = Column(String(10), default='RUB')
+    ad_type = Column(String(20))
+
+    # Местоположение и категория
+    region = Column(String(50), nullable=False)
+    city = Column(String(100), nullable=True)
+    category = Column(String(50), nullable=False)
+    subcategory = Column(String(50), nullable=True)
+
+    # Медиа (file_id могут устареть, но храним для истории)
+    photos = Column(ARRAY(String), default=[])
+    video = Column(String, nullable=True)
+
+    # Хэштеги
+    hashtags = Column(ARRAY(String), default=[])
+
+    # Статистика на момент архивации
+    views_count = Column(Integer, default=0)
+    favorites_count = Column(Integer, default=0)
+    contacts_count = Column(Integer, default=0)
+
+    # Временные метки
+    created_at = Column(DateTime, nullable=False)      # Когда создано
+    published_at = Column(DateTime, nullable=True)     # Когда опубликовано
+    deleted_at = Column(DateTime, nullable=True)       # Когда удалено пользователем
+    archived_at = Column(DateTime, default=datetime.utcnow)  # Когда перемещено в архив
+
+    # Причина удаления/архивации
+    archive_reason = Column(String(50), default='expired_deletion')  # expired_deletion, admin_cleanup
+
+    __table_args__ = (
+        Index('idx_archived_ad_user', 'user_id'),
+        Index('idx_archived_ad_date', 'archived_at'),
     )
