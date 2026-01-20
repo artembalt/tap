@@ -104,6 +104,16 @@ async def cmd_start_with_args(message: Message, command: CommandObject, state: F
         except Exception as e:
             logger.error(f"Ошибка редактирования объявления: {e}")
 
+    # Обработка переопубликации объявления
+    if args and args.startswith("republish_"):
+        try:
+            ad_id = args.replace("republish_", "")
+            logger.info(f"Запрос переопубликации: ad_id={ad_id}, user={message.from_user.id}")
+            await show_republish_menu(message, ad_id)
+            return
+        except Exception as e:
+            logger.error(f"Ошибка переопубликации объявления: {e}")
+
     # Для обычного /start - проверяем дебаунс
     if not _should_process_start(message.from_user.id):
         return
@@ -822,3 +832,177 @@ async def show_edit_menu(message: Message, ad_id: str):
         f"Выберите что изменить:",
         reply_markup=keyboard
     )
+
+
+# =============================================================================
+# ПЕРЕОПУБЛИКАЦИЯ ОБЪЯВЛЕНИЯ
+# =============================================================================
+
+async def show_republish_menu(message: Message, ad_id: str):
+    """Показать меню переопубликации объявления"""
+    from bot.services.ad_lifecycle import AdLifecycleService
+    from bot.config.pricing import AD_LIFECYCLE_CONFIG
+
+    user_id = message.from_user.id
+
+    # Получаем объявление
+    ad = await AdQueries.get_ad(ad_id)
+
+    if not ad:
+        await message.answer("❌ Объявление не найдено.", reply_markup=get_main_reply_keyboard())
+        return
+
+    if ad.user_id != user_id:
+        await message.answer("❌ Это не ваше объявление.", reply_markup=get_main_reply_keyboard())
+        return
+
+    if ad.status != "inactive":
+        await message.answer(
+            "ℹ️ Это объявление не требует переопубликации.\n"
+            "Переопубликация доступна только для неактивных объявлений.",
+            reply_markup=get_main_reply_keyboard()
+        )
+        return
+
+    ad_title = ad.title[:50] + "..." if len(ad.title) > 50 else ad.title
+
+    # Проверяем бесплатность переопубликации
+    config = AD_LIFECYCLE_CONFIG["republish"]
+    is_free = config.get("free_first_time", True) and (ad.republish_count or 0) == 0
+
+    if is_free:
+        price_text = "🆓 Бесплатно (первая переопубликация)"
+        button_text = "✅ Опубликовать заново"
+    else:
+        price_rub = config.get("price_rub", 29.0)
+        price_stars = config.get("price_stars", 15)
+        price_text = f"💰 {price_rub:.0f} ₽ или {price_stars} ⭐"
+        button_text = f"✅ Оплатить и опубликовать ({price_rub:.0f} ₽)"
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=button_text, callback_data=f"republish_confirm_{ad_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads")]
+    ])
+
+    await message.answer(
+        f"🔄 <b>Переопубликация объявления</b>\n\n"
+        f"📌 {ad_title}\n\n"
+        f"Объявление было снято с публикации после истечения срока.\n"
+        f"Вы можете опубликовать его заново.\n\n"
+        f"Стоимость: {price_text}",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("republish_confirm_"))
+async def callback_republish_confirm(callback: CallbackQuery):
+    """Подтверждение переопубликации объявления"""
+    from bot.database.connection import get_db_session
+    from bot.database.models import Ad, User
+    from bot.services.ad_lifecycle import AdLifecycleService
+    from bot.services.billing import BillingService
+    from bot.config.pricing import AD_LIFECYCLE_CONFIG
+    import uuid
+
+    ad_id = callback.data.replace("republish_confirm_", "")
+    user_id = callback.from_user.id
+
+    async with get_db_session() as session:
+        # Получаем объявление
+        result = await session.execute(
+            select(Ad).where(Ad.id == uuid.UUID(ad_id))
+        )
+        ad = result.scalar_one_or_none()
+
+        if not ad:
+            await callback.answer("❌ Объявление не найдено", show_alert=True)
+            return
+
+        if ad.user_id != user_id:
+            await callback.answer("❌ Это не ваше объявление", show_alert=True)
+            return
+
+        if ad.status != "inactive":
+            await callback.answer("ℹ️ Объявление уже активно", show_alert=True)
+            return
+
+        # Получаем пользователя
+        user_result = await session.execute(
+            select(User).where(User.telegram_id == user_id)
+        )
+        user = user_result.scalar_one_or_none()
+
+        if not user:
+            await callback.answer("❌ Пользователь не найден", show_alert=True)
+            return
+
+        # Проверяем бесплатность
+        config = AD_LIFECYCLE_CONFIG["republish"]
+        is_free = config.get("free_first_time", True) and (ad.republish_count or 0) == 0
+
+        # Если платно - проверяем и списываем баланс
+        if not is_free:
+            price_rub = config.get("price_rub", 29.0)
+
+            if (user.balance_rub or 0) < price_rub:
+                await callback.message.edit_text(
+                    f"❌ <b>Недостаточно средств</b>\n\n"
+                    f"Для переопубликации требуется: {price_rub:.0f} ₽\n"
+                    f"Ваш баланс: {user.balance_rub or 0:.0f} ₽\n\n"
+                    f"Пополните баланс в разделе «💰 Баланс»",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="💰 Пополнить баланс", callback_data="balance")],
+                        [InlineKeyboardButton(text="◀️ Назад", callback_data="my_ads")]
+                    ])
+                )
+                return
+
+            # Списываем
+            billing = BillingService(session)
+            await billing.charge(
+                user=user,
+                amount=price_rub,
+                currency="RUB",
+                description=f"Переопубликация объявления {ad.title[:30]}"
+            )
+
+        # Показываем спиннер
+        await callback.message.edit_text("⏳ Публикуем объявление...")
+
+        # Переопубликуем
+        lifecycle = AdLifecycleService(callback.bot, session)
+        success, message, channel_ids = await lifecycle.republish_from_archive(ad, user)
+
+        if success:
+            await session.commit()
+
+            result_text = f"✅ <b>Объявление опубликовано!</b>\n\n📌 {ad.title[:50]}"
+
+            # Добавляем ссылки на каналы
+            if channel_ids:
+                result_text += "\n\n📢 Ссылки на объявление:"
+                for channel, msg_ids in channel_ids.items():
+                    if msg_ids:
+                        msg_id = msg_ids[0] if isinstance(msg_ids, list) else msg_ids
+                        channel_clean = channel.lstrip('@')
+                        link = f"https://t.me/{channel_clean}/{msg_id}"
+                        result_text += f"\n• <a href=\"{link}\">{channel}</a>"
+
+            await callback.message.edit_text(
+                result_text,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="📋 Мои объявления", callback_data="my_ads")],
+                    [InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")]
+                ]),
+                disable_web_page_preview=True
+            )
+        else:
+            await callback.message.edit_text(
+                f"❌ <b>Ошибка публикации</b>\n\n{message}",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data=f"republish_confirm_{ad_id}")],
+                    [InlineKeyboardButton(text="◀️ Назад", callback_data="my_ads")]
+                ])
+            )
+
+    await callback.answer()

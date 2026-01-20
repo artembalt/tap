@@ -266,8 +266,11 @@ async def show_user_ads(message: Message, user_id: int, offset: int = 0, edit: b
         status_emoji = {
             "active": "✅",
             "pending": "⏳",
+            "inactive": "💤",  # Неактивное (срок истёк)
             "archived": "📦",
-            "rejected": "❌"
+            "rejected": "❌",
+            "deleted": "🗑",
+            "banned": "🚫"
         }.get(ad.status, "❓")
 
         # Формируем цену
@@ -294,8 +297,13 @@ async def show_user_ads(message: Message, user_id: int, offset: int = 0, edit: b
         # Ссылки на действия (deep links)
         edit_link = f"https://t.me/{bot_username}?start=edit_{ad.id}"
         delete_link = f"https://t.me/{bot_username}?start=del_{ad.id}"
+        republish_link = f"https://t.me/{bot_username}?start=republish_{ad.id}"
 
-        text += f"   <a href=\"{edit_link}\">✏️ Изменить</a>  <a href=\"{delete_link}\">🗑 Удалить</a>\n\n"
+        # Для неактивных объявлений показываем кнопку переопубликации
+        if ad.status == "inactive":
+            text += f"   <a href=\"{republish_link}\">🔄 Опубликовать заново</a>  <a href=\"{edit_link}\">✏️ Изменить</a>  <a href=\"{delete_link}\">🗑 Удалить</a>\n\n"
+        else:
+            text += f"   <a href=\"{edit_link}\">✏️ Изменить</a>  <a href=\"{delete_link}\">🗑 Удалить</a>\n\n"
 
     # Клавиатура с пагинацией
     keyboard = get_my_ads_keyboard(offset, total_count)

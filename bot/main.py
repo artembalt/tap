@@ -29,6 +29,7 @@ from bot.middlewares.auth import AuthMiddleware
 from bot.utils.commands import set_bot_commands
 from bot.database.connection import get_session
 from bot.services.exchange_rate import ExchangeRateService
+from bot.services.ad_lifecycle import AdLifecycleService
 from bot.services.robokassa import (
     verify_result_signature, parse_amount, parse_inv_id, PaymentLogger
 )
@@ -135,6 +136,87 @@ async def exchange_rate_updater():
             await asyncio.sleep(3600)
 
 
+async def ad_lifecycle_task(bot: Bot):
+    """
+    Фоновая задача для управления жизненным циклом объявлений.
+
+    Выполняет:
+    1. Каждый час: проверка истёкших объявлений → перемещение в архив
+    2. Каждый день в 10:00 МСК: уведомления об истекающих объявлениях
+    3. Каждый день в 3:00 МСК: полная архивация старых неактивных (6 мес)
+    """
+    from datetime import datetime, time as dt_time
+    import pytz
+    from sqlalchemy import select
+
+    msk = pytz.timezone('Europe/Moscow')
+    last_expiry_check = None
+    last_notification_day = None
+    last_archive_cleanup_day = None
+
+    # Ждём 30 секунд после старта чтобы бот полностью инициализировался
+    await asyncio.sleep(30)
+    logger.info("[LIFECYCLE] Фоновая задача запущена")
+
+    while True:
+        try:
+            now = datetime.now(msk)
+            current_hour = now.hour
+            current_date = now.date()
+
+            # 1. ПРОВЕРКА ИСТЁКШИХ ОБЪЯВЛЕНИЙ (каждый час)
+            if last_expiry_check is None or (now - last_expiry_check).total_seconds() >= 3600:
+                logger.info("[LIFECYCLE] Проверка истёкших объявлений...")
+                async with get_session() as session:
+                    service = AdLifecycleService(bot, session)
+                    processed = await service.process_expired_ads()
+                    if processed > 0:
+                        logger.info(f"[LIFECYCLE] Перемещено в архив: {processed}")
+                last_expiry_check = now
+
+            # 2. УВЕДОМЛЕНИЯ ОБ ИСТЕЧЕНИИ (в 10:00 МСК, раз в день)
+            if current_hour == 10 and last_notification_day != current_date:
+                logger.info("[LIFECYCLE] Отправка уведомлений об истечении...")
+                async with get_session() as session:
+                    service = AdLifecycleService(bot, session)
+                    ads = await service.get_ads_expiring_soon()
+
+                    sent_count = 0
+                    for ad in ads:
+                        # Получаем пользователя
+                        user_result = await session.execute(
+                            select(User).where(User.telegram_id == ad.user_id)
+                        )
+                        user = user_result.scalar_one_or_none()
+                        if user and user.notification_enabled:
+                            success = await service.send_expiry_notification(ad, user)
+                            if success:
+                                sent_count += 1
+
+                    if sent_count > 0:
+                        logger.info(f"[LIFECYCLE] Отправлено уведомлений: {sent_count}")
+
+                last_notification_day = current_date
+
+            # 3. ПОЛНАЯ АРХИВАЦИЯ СТАРЫХ (в 3:00 МСК, раз в день)
+            if current_hour == 3 and last_archive_cleanup_day != current_date:
+                logger.info("[LIFECYCLE] Архивация старых неактивных объявлений...")
+                async with get_session() as session:
+                    service = AdLifecycleService(bot, session)
+                    archived = await service.archive_old_inactive()
+                    if archived > 0:
+                        logger.info(f"[LIFECYCLE] Полностью заархивировано: {archived}")
+
+                last_archive_cleanup_day = current_date
+
+            # Спим 5 минут до следующей проверки
+            await asyncio.sleep(300)
+
+        except Exception as e:
+            logger.error(f"[LIFECYCLE] Ошибка в ad_lifecycle_task: {e}")
+            await asyncio.sleep(600)  # При ошибке ждём 10 минут
+
+
 async def on_startup(bot: Bot):
     logger.info("=" * 60)
     logger.info("ЗАПУСК БОТА")
@@ -159,6 +241,7 @@ async def on_startup(bot: Bot):
     # Запускаем фоновые задачи
     asyncio.create_task(keepalive_task(bot))
     asyncio.create_task(exchange_rate_updater())
+    asyncio.create_task(ad_lifecycle_task(bot))
 
     # Обновляем курс при старте если его нет
     try:
