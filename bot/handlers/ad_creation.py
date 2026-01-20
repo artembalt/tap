@@ -1282,34 +1282,8 @@ async def confirm_ad(callback: CallbackQuery, state: FSMContext):
 
     await callback.answer()
 
-    # Показываем спиннер
-    spinner_msg = await callback.message.answer("⏳ <b>Проверяю объявление...</b>\n\nПожалуйста, подождите")
-
-    # Проверяем фото на запрещённый текст через OCR
-    photos = data.get('photos', [])
-    if photos:
-        photos_ok, photos_error = await check_photos_for_forbidden_text(
-            bot=callback.message.bot,
-            photo_ids=photos,
-            category=data.get('category'),
-            subcategory=data.get('subcategory')
-        )
-        if not photos_ok:
-            await spinner_msg.edit_text(
-                f"❌ <b>Объявление отклонено</b>\n\n{photos_error}\n\n"
-                "Пожалуйста, замените фото и попробуйте снова."
-            )
-            # Возвращаем в состояние редактирования
-            await state.set_state(AdCreation.confirm)
-            from bot.keyboards.inline import get_confirm_with_edit_keyboard
-            await callback.message.answer(
-                "Вы можете отредактировать объявление:",
-                reply_markup=get_confirm_with_edit_keyboard()
-            )
-            return
-
-    # Обновляем спиннер
-    await spinner_msg.edit_text("⏳ <b>Публикую объявление...</b>\n\nПожалуйста, подождите")
+    # Показываем спиннер (фото уже проверены при загрузке)
+    spinner_msg = await callback.message.answer("⏳ <b>Публикую объявление...</b>\n\nПожалуйста, подождите")
 
     try:
         bot_info = await callback.message.bot.get_me()
