@@ -265,27 +265,29 @@ CATEGORIES_WITH_DELIVERY = [
 DEAL_TYPES_WITH_CONDITION = ["sell", "exchange"]
 
 # Конфигурация каналов для публикации объявлений
+# archive - приватный канал для хранения медиа неактивных объявлений
 CHANNELS_CONFIG = {
     "test": {
         "main": "@prodaytest",
         "menu": "@prodaytest_menu",
+        "archive": "",  # Указать ID приватного архивного канала (например: -1001234567890)
         "categories": {
             "realty": "@prodaytest_realty",
             "auto": "@prodaytest_avto",
             "smartphones": "@prodaytest_smartphones"
         }
     },
-    "kaliningrad": {"main": "", "menu": "", "categories": {}},
-    "spb": {"main": "", "menu": "", "categories": {}},
-    "moscow": {"main": "", "menu": "", "categories": {}},
-    "karelia": {"main": "", "menu": "", "categories": {}},
-    "komi": {"main": "", "menu": "", "categories": {}},
-    "arkhangelsk": {"main": "", "menu": "", "categories": {}},
-    "nenets": {"main": "", "menu": "", "categories": {}},
-    "vologda": {"main": "", "menu": "", "categories": {}},
-    "murmansk": {"main": "", "menu": "", "categories": {}},
-    "novgorod": {"main": "", "menu": "", "categories": {}},
-    "pskov": {"main": "", "menu": "", "categories": {}}
+    "kaliningrad": {"main": "", "menu": "", "archive": "", "categories": {}},
+    "spb": {"main": "", "menu": "", "archive": "", "categories": {}},
+    "moscow": {"main": "", "menu": "", "archive": "", "categories": {}},
+    "karelia": {"main": "", "menu": "", "archive": "", "categories": {}},
+    "komi": {"main": "", "menu": "", "archive": "", "categories": {}},
+    "arkhangelsk": {"main": "", "menu": "", "archive": "", "categories": {}},
+    "nenets": {"main": "", "menu": "", "archive": "", "categories": {}},
+    "vologda": {"main": "", "menu": "", "archive": "", "categories": {}},
+    "murmansk": {"main": "", "menu": "", "archive": "", "categories": {}},
+    "novgorod": {"main": "", "menu": "", "archive": "", "categories": {}},
+    "pskov": {"main": "", "menu": "", "archive": "", "categories": {}}
 }
 
 # Платные услуги
