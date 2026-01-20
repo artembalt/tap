@@ -286,6 +286,8 @@ def is_available() -> bool:
     try:
         import easyocr
         from nudenet import NudeDetector
+        logger.info("[LocalMod] is_available() -> True")
         return True
-    except ImportError:
+    except ImportError as e:
+        logger.warning(f"[LocalMod] is_available() -> False: {e}")
         return False
