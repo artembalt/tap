@@ -270,7 +270,7 @@ CHANNELS_CONFIG = {
     "test": {
         "main": "@prodaytest",
         "menu": "@prodaytest_menu",
-        "archive": "",  # Указать ID приватного архивного канала (например: -1001234567890)
+        "archive": "296182105",  # Указать ID приватного архивного канала (например: -1001234567890)
         "categories": {
             "realty": "@prodaytest_realty",
             "auto": "@prodaytest_avto",
