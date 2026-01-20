@@ -793,13 +793,40 @@ async def skip_photos(callback: CallbackQuery, state: FSMContext):
 async def photos_done(callback: CallbackQuery, state: FSMContext):
     logger.info("[PHOTOS] done")
     await safe_clear_keyboard(callback)
-    
-    data = await state.get_data()
-    count = len(data.get('photos', []))
-    await callback.message.answer(f"✅ <b>Фото:</b> {count} шт.")
-    
-    await ask_video(callback.message, state)
     await callback.answer()
+
+    data = await state.get_data()
+    photos = data.get('photos', [])
+    count = len(photos)
+
+    if not photos:
+        await callback.message.answer("⚠️ Вы не загрузили ни одного фото. Загрузите хотя бы одно.")
+        return
+
+    # Проверяем фото на запрещённый контент (NSFW + текст)
+    spinner_msg = await callback.message.answer("⏳ <b>Проверяю фото...</b>")
+
+    photos_ok, photos_error = await check_photos_for_forbidden_text(
+        bot=callback.message.bot,
+        photo_ids=photos,
+        category=data.get('category'),
+        subcategory=data.get('subcategory')
+    )
+
+    await spinner_msg.delete()
+
+    if not photos_ok:
+        # Фото отклонены — просим заменить
+        from bot.keyboards.inline import get_photos_keyboard
+        await callback.message.answer(
+            f"❌ <b>Фото отклонены</b>\n\n{photos_error}\n\n"
+            "Пожалуйста, удалите проблемные фото и загрузите новые.",
+            reply_markup=get_photos_keyboard(count)
+        )
+        return
+
+    await callback.message.answer(f"✅ <b>Фото:</b> {count} шт.")
+    await ask_video(callback.message, state)
 
 
 # ========== ВИДЕО ==========
