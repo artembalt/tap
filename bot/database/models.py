@@ -256,6 +256,15 @@ class Ad(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     deleted_at = Column(DateTime, nullable=True)  # Когда удалено пользователем
 
+    # Автоподнятие
+    boost_service = Column(String(50), nullable=True)  # Тип услуги: boost_4x_6d, boost_2x_10d
+    boost_remaining = Column(Integer, default=0)       # Сколько поднятий осталось
+    next_boost_at = Column(DateTime, nullable=True)    # Когда следующее автоподнятие
+
+    # Продление и уведомления
+    last_extended_at = Column(DateTime, nullable=True)  # Когда последний раз продлевали
+    notifications_sent = Column(JSONB, default={})      # Какие уведомления отправлены {"day_2": true, "day_1": true, "hour_1": true}
+
     # Отношения
     user = relationship("User", back_populates="ads")
     favorited_by = relationship("User", secondary=ad_favorites, back_populates="favorites")
@@ -270,6 +279,7 @@ class Ad(Base):
         Index('idx_ad_published', 'published_at'),
         Index('idx_ad_search', 'title', 'description'),  # Для поиска
         Index('idx_ad_archived_to_channel', 'archived_to_channel_at'),  # Для поиска старых архивных
+        Index('idx_ad_next_boost', 'next_boost_at'),  # Для автоподнятия
     )
 
 class Payment(Base):

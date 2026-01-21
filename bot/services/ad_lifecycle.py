@@ -3,17 +3,13 @@
 Сервис управления жизненным циклом объявлений.
 
 Функции:
-- Перемещение в архивный канал (когда срок публикации истёк)
+- Уведомления об истечении срока (28, 29, 30 дни)
+- Продление объявления (кнопка "Продлить")
+- Снятие с публикации (кнопка "Снять" или игнор)
+- Перемещение в архивный канал
 - Переопубликация из архива
-- Полная архивация (через 6 месяцев неактивности)
-- Уведомления об истечении срока
-
-Использование:
-    from bot.services.ad_lifecycle import AdLifecycleService
-
-    service = AdLifecycleService(bot, session)
-    await service.move_to_archive(ad)
-    await service.republish_from_archive(ad)
+- Автоподнятие объявлений
+- Полная архивация через 90 дней неактивности
 """
 
 import logging
@@ -22,12 +18,12 @@ from typing import Optional, List, Dict, Any, Tuple
 from uuid import UUID
 
 from aiogram import Bot
-from aiogram.types import InputMediaPhoto
+from aiogram.types import InputMediaPhoto, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from sqlalchemy import select, update, and_
+from sqlalchemy import select, update, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.config.pricing import AD_LIFECYCLE_CONFIG, ACCOUNT_TYPES, get_account_limits
+from bot.config.pricing import AD_LIFECYCLE_CONFIG, get_account_limits
 from bot.database.models import Ad, User, ArchivedAd, AdStatus
 from shared.regions_config import CHANNELS_CONFIG, REGIONS, CATEGORIES, RegionConfig
 
@@ -42,6 +38,60 @@ class AdLifecycleService:
         self.session = session
 
     # =========================================================================
+    # ПРОДЛЕНИЕ ОБЪЯВЛЕНИЯ
+    # =========================================================================
+
+    async def extend_ad(self, ad: Ad) -> Tuple[bool, str]:
+        """
+        Продлить объявление на 30 дней.
+
+        При продлении:
+        1. Удаляем старый пост из канала
+        2. Публикуем заново (в начало ленты)
+        3. Обновляем expires_at на +30 дней
+        4. Сбрасываем notifications_sent
+
+        Returns:
+            (success, message)
+        """
+        logger.info(f"[LIFECYCLE] extend_ad: ad_id={ad.id}")
+
+        if ad.status != AdStatus.ACTIVE.value:
+            return False, "Объявление не активно"
+
+        # Получаем конфигурацию региона
+        region_config = RegionConfig.get_region(ad.region)
+        if not region_config or not region_config.is_configured():
+            return False, "Каналы для региона не настроены"
+
+        try:
+            # 1. Удаляем старые посты из каналов
+            await self._delete_from_channels(ad)
+
+            # 2. Публикуем заново
+            channel_ids = await self._publish_to_channels(ad, region_config)
+
+            if not channel_ids:
+                return False, "Не удалось опубликовать в каналы"
+
+            # 3. Обновляем объявление
+            extend_days = AD_LIFECYCLE_CONFIG["extend"]["duration_days"]
+            ad.channel_message_ids = channel_ids
+            ad.published_at = datetime.utcnow()
+            ad.expires_at = datetime.utcnow() + timedelta(days=extend_days)
+            ad.last_extended_at = datetime.utcnow()
+            ad.notifications_sent = {}  # Сбрасываем уведомления
+
+            await self.session.commit()
+
+            logger.info(f"[LIFECYCLE] Объявление {ad.id} продлено до {ad.expires_at}")
+            return True, "Объявление продлено"
+
+        except Exception as e:
+            logger.error(f"[LIFECYCLE] Ошибка extend_ad: {e}")
+            return False, f"Ошибка: {str(e)}"
+
+    # =========================================================================
     # ПЕРЕМЕЩЕНИЕ В АРХИВНЫЙ КАНАЛ
     # =========================================================================
 
@@ -49,20 +99,16 @@ class AdLifecycleService:
         """
         Переместить объявление в архивный канал.
 
-        Вызывается когда срок публикации истёк:
+        Вызывается когда:
+        - Срок публикации истёк и пользователь не продлил
+        - Пользователь нажал "Снять"
+
         1. Удаляет из родного канала
         2. Публикует в архивный канал
         3. Обновляет статус на INACTIVE
-
-        Args:
-            ad: Объявление для перемещения
-
-        Returns:
-            True если успешно, False если ошибка
         """
         logger.info(f"[LIFECYCLE] move_to_archive: ad_id={ad.id}")
 
-        # Получаем конфигурацию региона
         region_config = RegionConfig.get_region(ad.region)
         if not region_config:
             logger.error(f"[LIFECYCLE] Регион не найден: {ad.region}")
@@ -71,8 +117,9 @@ class AdLifecycleService:
         archive_channel = region_config.archive_channel
         if not archive_channel:
             logger.warning(f"[LIFECYCLE] Архивный канал не настроен для {ad.region}")
-            # Просто меняем статус без перемещения в архивный канал
+            # Просто меняем статус без перемещения
             ad.status = AdStatus.INACTIVE.value
+            ad.notifications_sent = {}
             return True
 
         try:
@@ -83,17 +130,21 @@ class AdLifecycleService:
             archive_message_ids = await self._publish_to_archive(ad, archive_channel)
 
             if archive_message_ids:
-                # 3. Обновляем объявление
                 ad.status = AdStatus.INACTIVE.value
                 ad.archive_message_ids = {archive_channel: archive_message_ids}
                 ad.archived_to_channel_at = datetime.utcnow()
-                ad.channel_message_ids = {}  # Очищаем старые ID
+                ad.channel_message_ids = {}
+                ad.notifications_sent = {}
 
                 logger.info(f"[LIFECYCLE] Объявление {ad.id} перемещено в архив")
                 return True
             else:
-                logger.error(f"[LIFECYCLE] Не удалось опубликовать в архивный канал")
-                return False
+                # Даже если не удалось опубликовать в архив, меняем статус
+                ad.status = AdStatus.INACTIVE.value
+                ad.channel_message_ids = {}
+                ad.notifications_sent = {}
+                logger.warning(f"[LIFECYCLE] Объявление {ad.id} снято без публикации в архив")
+                return True
 
         except Exception as e:
             logger.error(f"[LIFECYCLE] Ошибка move_to_archive: {e}")
@@ -115,28 +166,18 @@ class AdLifecycleService:
         """Безопасное удаление сообщения"""
         try:
             await self.bot.delete_message(chat_id=chat_id, message_id=message_id)
-            logger.debug(f"[LIFECYCLE] Удалено сообщение {message_id} из {chat_id}")
             return True
         except TelegramBadRequest as e:
-            if "message to delete not found" in str(e):
-                logger.debug(f"[LIFECYCLE] Сообщение уже удалено: {message_id}")
-            else:
-                logger.warning(f"[LIFECYCLE] Ошибка удаления: {e}")
+            if "message to delete not found" not in str(e) and "message can't be deleted" not in str(e):
+                logger.warning(f"[LIFECYCLE] Ошибка удаления {chat_id}/{message_id}: {e}")
             return False
         except Exception as e:
             logger.warning(f"[LIFECYCLE] Ошибка удаления сообщения: {e}")
             return False
 
     async def _publish_to_archive(self, ad: Ad, archive_channel: str) -> List[int]:
-        """
-        Опубликовать объявление в архивный канал.
-
-        Returns:
-            Список message_id опубликованных сообщений
-        """
-        # Формируем текст (упрощённый, для архива)
+        """Опубликовать объявление в архивный канал"""
         text = self._format_archive_text(ad)
-
         photos = ad.photos or []
         message_ids = []
 
@@ -150,7 +191,6 @@ class AdLifecycleService:
                     )
                     message_ids = [msg.message_id]
                 else:
-                    # Media group
                     media = [InputMediaPhoto(media=photos[0], caption=text)]
                     for p in photos[1:10]:
                         media.append(InputMediaPhoto(media=p))
@@ -164,7 +204,6 @@ class AdLifecycleService:
                 )
                 message_ids = [msg.message_id]
             else:
-                # Только текст
                 msg = await self.bot.send_message(
                     chat_id=archive_channel,
                     text=text,
@@ -172,7 +211,6 @@ class AdLifecycleService:
                 )
                 message_ids = [msg.message_id]
 
-            logger.info(f"[LIFECYCLE] Опубликовано в архив {archive_channel}: {message_ids}")
             return message_ids
 
         except Exception as e:
@@ -209,41 +247,18 @@ class AdLifecycleService:
     ) -> Tuple[bool, str, Optional[Dict[str, List[int]]]]:
         """
         Переопубликовать объявление из архива.
-
-        1. Получить фото из архивного канала
-        2. Опубликовать в родной канал
-        3. Удалить из архивного канала
-        4. Обновить статус на ACTIVE
-
-        Args:
-            ad: Объявление для переопубликации
-            user: Пользователь (для проверки платности)
-
-        Returns:
-            (success, message, channel_ids)
         """
         logger.info(f"[LIFECYCLE] republish_from_archive: ad_id={ad.id}")
 
         if ad.status != AdStatus.INACTIVE.value:
             return False, "Объявление не в архиве", None
 
-        # Проверяем cooldown
-        config = AD_LIFECYCLE_CONFIG["republish"]
-        if ad.last_republished_at:
-            cooldown_hours = config.get("cooldown_hours", 24)
-            cooldown_delta = timedelta(hours=cooldown_hours)
-            if datetime.utcnow() - ad.last_republished_at < cooldown_delta:
-                remaining = (ad.last_republished_at + cooldown_delta) - datetime.utcnow()
-                hours = int(remaining.total_seconds() // 3600)
-                return False, f"Переопубликация доступна через {hours} ч.", None
-
-        # Получаем конфигурацию региона
         region_config = RegionConfig.get_region(ad.region)
         if not region_config or not region_config.is_configured():
             return False, "Каналы для региона не настроены", None
 
         try:
-            # 1. Публикуем в родные каналы (фото уже есть в ad.photos)
+            # 1. Публикуем в каналы
             channel_ids = await self._publish_to_channels(ad, region_config)
 
             if not channel_ids:
@@ -259,7 +274,6 @@ class AdLifecycleService:
                         await self._safe_delete_message(channel_id, message_ids)
 
             # 3. Обновляем объявление
-            # Получаем срок публикации из типа аккаунта
             account_limits = get_account_limits(user.account_type or "free")
             duration_days = account_limits.get("ad_duration_days", 30)
 
@@ -271,6 +285,7 @@ class AdLifecycleService:
             ad.expires_at = datetime.utcnow() + timedelta(days=duration_days)
             ad.republish_count = (ad.republish_count or 0) + 1
             ad.last_republished_at = datetime.utcnow()
+            ad.notifications_sent = {}
 
             logger.info(f"[LIFECYCLE] Объявление {ad.id} переопубликовано")
             return True, "Объявление опубликовано", channel_ids
@@ -287,7 +302,6 @@ class AdLifecycleService:
         """Опубликовать объявление в каналы региона"""
         from bot.handlers.ad_creation import publish_to_channel
 
-        # Формируем data как при первичной публикации
         data = {
             "region": ad.region,
             "city": ad.city,
@@ -304,53 +318,277 @@ class AdLifecycleService:
             "links": ad.links or [],
         }
 
-        # Получаем информацию о боте
         bot_info = await self.bot.get_me()
-
-        # Используем существующую функцию публикации
         channel_ids = await publish_to_channel(self.bot, bot_info, ad, data)
         return channel_ids
 
-    def is_republish_free(self, ad: Ad) -> bool:
-        """Проверить, бесплатна ли переопубликация"""
-        config = AD_LIFECYCLE_CONFIG["republish"]
+    # =========================================================================
+    # ПОДНЯТИЕ ОБЪЯВЛЕНИЯ (BOOST)
+    # =========================================================================
 
-        # Первая переопубликация бесплатна?
-        if config.get("free_first_time", True):
-            if (ad.republish_count or 0) == 0:
-                return True
+    async def boost_ad(self, ad: Ad) -> Tuple[bool, str]:
+        """
+        Поднять объявление в начало ленты.
 
-        return False
+        Удаляет старый пост и публикует заново.
+        """
+        logger.info(f"[LIFECYCLE] boost_ad: ad_id={ad.id}")
 
-    def get_republish_price(self) -> Tuple[float, int]:
-        """Получить цену переопубликации (rub, stars)"""
-        config = AD_LIFECYCLE_CONFIG["republish"]
-        return (
-            config.get("price_rub", 29.0),
-            config.get("price_stars", 15)
-        )
+        if ad.status != AdStatus.ACTIVE.value:
+            return False, "Объявление не активно"
+
+        region_config = RegionConfig.get_region(ad.region)
+        if not region_config or not region_config.is_configured():
+            return False, "Каналы для региона не настроены"
+
+        try:
+            # 1. Удаляем старые посты
+            await self._delete_from_channels(ad)
+
+            # 2. Публикуем заново
+            channel_ids = await self._publish_to_channels(ad, region_config)
+
+            if not channel_ids:
+                return False, "Не удалось опубликовать в каналы"
+
+            # 3. Обновляем объявление
+            ad.channel_message_ids = channel_ids
+            ad.published_at = datetime.utcnow()
+
+            # Если есть автоподнятие - уменьшаем счётчик и ставим следующую дату
+            if ad.boost_remaining and ad.boost_remaining > 0:
+                ad.boost_remaining -= 1
+                if ad.boost_remaining > 0 and ad.boost_service:
+                    from bot.config.pricing import PAID_SERVICES
+                    service = PAID_SERVICES.get(ad.boost_service, {})
+                    interval_days = service.get("interval_days", 6)
+                    ad.next_boost_at = datetime.utcnow() + timedelta(days=interval_days)
+                else:
+                    ad.boost_service = None
+                    ad.next_boost_at = None
+
+            await self.session.commit()
+
+            logger.info(f"[LIFECYCLE] Объявление {ad.id} поднято")
+            return True, "Объявление поднято"
+
+        except Exception as e:
+            logger.error(f"[LIFECYCLE] Ошибка boost_ad: {e}")
+            return False, f"Ошибка: {str(e)}"
 
     # =========================================================================
-    # ПОЛНАЯ АРХИВАЦИЯ (6 МЕСЯЦЕВ)
+    # УВЕДОМЛЕНИЯ
+    # =========================================================================
+
+    async def get_ads_for_notification(self, days_before: int) -> List[Ad]:
+        """
+        Получить объявления для уведомления за N дней до истечения.
+        """
+        config = AD_LIFECYCLE_CONFIG["notifications"]
+        if not config.get("enabled", True):
+            return []
+
+        now = datetime.utcnow()
+        target_date = now + timedelta(days=days_before)
+
+        # Ищем объявления, которые истекают в указанный день
+        # и которым ещё не отправлено это уведомление
+        stmt = select(Ad).where(
+            and_(
+                Ad.status == AdStatus.ACTIVE.value,
+                Ad.expires_at != None,
+                Ad.expires_at > now,
+                Ad.expires_at <= target_date + timedelta(hours=24)
+            )
+        )
+
+        result = await self.session.execute(stmt)
+        ads = result.scalars().all()
+
+        # Фильтруем по отправленным уведомлениям
+        notification_key = f"day_{days_before}"
+        return [ad for ad in ads if not (ad.notifications_sent or {}).get(notification_key)]
+
+    async def get_ads_for_final_notification(self) -> List[Ad]:
+        """
+        Получить объявления для финального уведомления (за 1 час до удаления).
+        """
+        config = AD_LIFECYCLE_CONFIG["notifications"]
+        hours_before = config.get("final_warn_hours", 1)
+
+        now = datetime.utcnow()
+        target_time = now + timedelta(hours=hours_before)
+
+        stmt = select(Ad).where(
+            and_(
+                Ad.status == AdStatus.ACTIVE.value,
+                Ad.expires_at != None,
+                Ad.expires_at > now,
+                Ad.expires_at <= target_time
+            )
+        )
+
+        result = await self.session.execute(stmt)
+        ads = result.scalars().all()
+
+        notification_key = "hour_1"
+        return [ad for ad in ads if not (ad.notifications_sent or {}).get(notification_key)]
+
+    async def send_expiry_notification(
+        self,
+        ad: Ad,
+        user: User,
+        days_left: int,
+        is_final: bool = False
+    ) -> bool:
+        """
+        Отправить уведомление об истечении срока с кнопками.
+        """
+        try:
+            # Формируем ссылку на объявление
+            channel_ids = ad.channel_message_ids or {}
+            ad_link = None
+            for channel, msg_ids in channel_ids.items():
+                first_msg_id = msg_ids[0] if isinstance(msg_ids, list) else msg_ids
+                if channel.startswith("@"):
+                    ad_link = f"https://t.me/{channel[1:]}/{first_msg_id}"
+                    break
+
+            # Текст уведомления
+            if is_final:
+                time_left = "менее 1 часа"
+                urgency = "🚨"
+            elif days_left == 1:
+                time_left = "1 день"
+                urgency = "⚠️"
+            else:
+                time_left = f"{days_left} дня"
+                urgency = "⏰"
+
+            title_link = f'<a href="{ad_link}">{ad.title}</a>' if ad_link else ad.title
+
+            text = (
+                f"{urgency} <b>Объявление скоро будет снято!</b>\n\n"
+                f"📋 {title_link}\n"
+                f"⏳ Осталось: {time_left}\n\n"
+                f"После истечения срока объявление будет удалено из канала "
+                f"и перемещено в архив. Комментарии пользователей к объявлению будут удалены.\n\n"
+                f"Объявление можно восстановить из архива в любое время."
+            )
+
+            # Кнопки
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="✅ Продлить", callback_data=f"extend_ad:{ad.id}"),
+                    InlineKeyboardButton(text="❌ Снять", callback_data=f"archive_ad:{ad.id}")
+                ]
+            ])
+
+            await self.bot.send_message(
+                chat_id=user.telegram_id,
+                text=text,
+                reply_markup=keyboard,
+                disable_web_page_preview=True
+            )
+
+            # Помечаем уведомление как отправленное
+            notifications = ad.notifications_sent or {}
+            if is_final:
+                notifications["hour_1"] = True
+            else:
+                notifications[f"day_{days_left}"] = True
+            ad.notifications_sent = notifications
+
+            return True
+
+        except TelegramForbiddenError:
+            logger.warning(f"[LIFECYCLE] Пользователь {user.telegram_id} заблокировал бота")
+            return False
+        except Exception as e:
+            logger.error(f"[LIFECYCLE] Ошибка отправки уведомления: {e}")
+            return False
+
+    # =========================================================================
+    # ОБРАБОТКА ИСТЁКШИХ ОБЪЯВЛЕНИЙ
+    # =========================================================================
+
+    async def process_expired_ads(self) -> int:
+        """
+        Обработать объявления с истёкшим сроком публикации.
+        """
+        now = datetime.utcnow()
+
+        stmt = select(Ad).where(
+            and_(
+                Ad.status == AdStatus.ACTIVE.value,
+                Ad.expires_at != None,
+                Ad.expires_at < now
+            )
+        ).limit(100)
+
+        result = await self.session.execute(stmt)
+        ads = result.scalars().all()
+
+        processed_count = 0
+        for ad in ads:
+            success = await self.move_to_archive(ad)
+            if success:
+                processed_count += 1
+
+        if processed_count > 0:
+            await self.session.commit()
+
+        logger.info(f"[LIFECYCLE] Обработано истёкших: {processed_count}")
+        return processed_count
+
+    # =========================================================================
+    # АВТОПОДНЯТИЕ
+    # =========================================================================
+
+    async def process_auto_boosts(self) -> int:
+        """
+        Обработать автоподнятия объявлений.
+        """
+        now = datetime.utcnow()
+
+        stmt = select(Ad).where(
+            and_(
+                Ad.status == AdStatus.ACTIVE.value,
+                Ad.boost_remaining > 0,
+                Ad.next_boost_at != None,
+                Ad.next_boost_at <= now
+            )
+        ).limit(50)
+
+        result = await self.session.execute(stmt)
+        ads = result.scalars().all()
+
+        boosted_count = 0
+        for ad in ads:
+            success, _ = await self.boost_ad(ad)
+            if success:
+                boosted_count += 1
+
+        if boosted_count > 0:
+            await self.session.commit()
+
+        logger.info(f"[LIFECYCLE] Автоподнято: {boosted_count}")
+        return boosted_count
+
+    # =========================================================================
+    # ПОЛНАЯ АРХИВАЦИЯ (90 ДНЕЙ)
     # =========================================================================
 
     async def archive_old_inactive(self) -> int:
         """
         Переместить старые неактивные объявления в таблицу archived_ads.
-
-        Вызывается планировщиком ежедневно.
-        Условие: status=INACTIVE и archived_to_channel_at < now() - 6 месяцев
-
-        Returns:
-            Количество заархивированных объявлений
         """
         config = AD_LIFECYCLE_CONFIG["archive"]
-        retention_days = config.get("inactive_retention_days", 180)
+        retention_days = config.get("inactive_retention_days", 90)
         batch_size = config.get("cleanup_batch_size", 100)
 
         cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
 
-        # Находим объявления для архивации
         stmt = select(Ad).where(
             and_(
                 Ad.status == AdStatus.INACTIVE.value,
@@ -401,8 +639,9 @@ class AdLifecycleService:
                 )
                 self.session.add(archived_ad)
 
-                # 3. Удаляем из основной таблицы
-                await self.session.delete(ad)
+                # 3. Меняем статус на DELETED
+                ad.status = AdStatus.DELETED.value
+                ad.deleted_at = datetime.utcnow()
                 archived_count += 1
 
                 logger.info(f"[LIFECYCLE] Объявление {ad.id} полностью заархивировано")
@@ -414,112 +653,29 @@ class AdLifecycleService:
         if archived_count > 0:
             await self.session.commit()
 
-        logger.info(f"[LIFECYCLE] Заархивировано {archived_count} объявлений")
+        logger.info(f"[LIFECYCLE] Заархивировано: {archived_count}")
         return archived_count
 
     # =========================================================================
-    # ПРОВЕРКА ИСТЕКШИХ ОБЪЯВЛЕНИЙ
+    # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
     # =========================================================================
 
-    async def process_expired_ads(self) -> int:
-        """
-        Обработать объявления с истёкшим сроком публикации.
+    def is_republish_free(self, ad: Ad) -> bool:
+        """Проверить, бесплатна ли переопубликация"""
+        config = AD_LIFECYCLE_CONFIG["republish"]
+        if config.get("free_first_time", True):
+            if (ad.republish_count or 0) == 0:
+                return True
+        return False
 
-        Вызывается планировщиком (каждый час или чаще).
-
-        Returns:
-            Количество обработанных объявлений
-        """
-        now = datetime.utcnow()
-
-        # Находим активные объявления с истёкшим сроком
-        stmt = select(Ad).where(
-            and_(
-                Ad.status == AdStatus.ACTIVE.value,
-                Ad.expires_at != None,
-                Ad.expires_at < now
-            )
-        ).limit(100)
-
-        result = await self.session.execute(stmt)
-        ads = result.scalars().all()
-
-        processed_count = 0
-        for ad in ads:
-            success = await self.move_to_archive(ad)
-            if success:
-                processed_count += 1
-
-        if processed_count > 0:
-            await self.session.commit()
-
-        logger.info(f"[LIFECYCLE] Обработано истёкших: {processed_count}")
-        return processed_count
-
-    # =========================================================================
-    # УВЕДОМЛЕНИЯ
-    # =========================================================================
-
-    async def get_ads_expiring_soon(self) -> List[Ad]:
-        """
-        Получить объявления, срок которых истекает скоро.
-
-        Returns:
-            Список объявлений для уведомления
-        """
-        config = AD_LIFECYCLE_CONFIG["notifications"]
-        if not config.get("expiry_warn_enabled", True):
-            return []
-
-        warn_days = config.get("expiry_warn_days", 1)
-
-        now = datetime.utcnow()
-        warn_start = now
-        warn_end = now + timedelta(days=warn_days)
-
-        stmt = select(Ad).where(
-            and_(
-                Ad.status == AdStatus.ACTIVE.value,
-                Ad.expires_at != None,
-                Ad.expires_at > warn_start,
-                Ad.expires_at <= warn_end
-            )
+    def get_republish_price(self) -> Tuple[float, int]:
+        """Получить цену переопубликации (rub, stars)"""
+        config = AD_LIFECYCLE_CONFIG["republish"]
+        return (
+            config.get("price_rub", 29.0),
+            config.get("price_stars", 15)
         )
 
-        result = await self.session.execute(stmt)
-        return result.scalars().all()
-
-    async def send_expiry_notification(self, ad: Ad, user: User) -> bool:
-        """Отправить уведомление об истечении срока"""
-        try:
-            hours_left = int((ad.expires_at - datetime.utcnow()).total_seconds() / 3600)
-
-            text = (
-                f"⏰ <b>Объявление скоро истечёт!</b>\n\n"
-                f"📋 {ad.title}\n"
-                f"⏳ Осталось: {hours_left} ч.\n\n"
-                f"После истечения срока объявление будет снято с публикации, "
-                f"но сохранится в вашем личном кабинете.\n\n"
-                f"Вы сможете переопубликовать его в любое время."
-            )
-
-            await self.bot.send_message(
-                chat_id=user.telegram_id,
-                text=text
-            )
-            return True
-
-        except TelegramForbiddenError:
-            logger.warning(f"[LIFECYCLE] Пользователь {user.telegram_id} заблокировал бота")
-            return False
-        except Exception as e:
-            logger.error(f"[LIFECYCLE] Ошибка отправки уведомления: {e}")
-            return False
-
-
-# =========================================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
-# =========================================================================
 
 async def get_lifecycle_service(bot: Bot, session: AsyncSession) -> AdLifecycleService:
     """Фабрика для создания сервиса"""
