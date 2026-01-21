@@ -6,19 +6,26 @@
 Изменение лимитов — в bot/config/pricing.py
 
 Использование:
-    from bot.utils.limits import can_create_ad, get_user_limits
+    from bot.utils.limits import can_create_ad, can_publish_ad, get_user_limits
 
+    # Проверка лимита активных объявлений
     can, reason = await can_create_ad(user, session)
     if not can:
         await message.answer(f"❌ {reason}")
         return
+
+    # Проверка лимита публикаций за 30 дней
+    can, reason, price = await can_publish_ad(user, session)
+    if reason == "requires_payment":
+        # Показать кнопку оплаты за доп. публикацию (price рублей)
+        pass
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Tuple, Dict, Any, Optional, TYPE_CHECKING
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.config.pricing import ACCOUNT_TYPES, PAID_SERVICES
@@ -110,6 +117,96 @@ async def can_create_ad(user: "UserType", session: AsyncSession) -> Tuple[bool, 
             )
 
     return True, ""
+
+
+async def can_publish_ad(
+    user: "UserType",
+    session: AsyncSession
+) -> Tuple[bool, str, Optional[float]]:
+    """
+    Проверка: может ли пользователь опубликовать объявление?
+
+    Считает количество публикаций за последние 30 дней.
+    Продление (extend) НЕ считается новой публикацией.
+
+    Возвращает:
+        (True, "", None) — можно бесплатно
+        (True, "requires_payment", price) — нужна оплата за доп. публикацию
+        (False, "причина", None) — нельзя
+    """
+    limits = get_user_limits(user)
+    account_type = user.account_type or "free"
+
+    # Проверяем истёк ли срок подписки
+    if account_type != "free" and user.account_until:
+        if user.account_until < datetime.utcnow():
+            account_type = "free"
+
+    account_config = ACCOUNT_TYPES.get(account_type, ACCOUNT_TYPES["free"])
+
+    # Лимит публикаций за 30 дней
+    max_publications = limits.get("max_publications_per_30d", 30)
+
+    # Считаем публикации за последние 30 дней
+    # Считаем только created_at (новые объявления), не extended_at
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+
+    result = await session.execute(
+        select(func.count(Ad.id))
+        .where(Ad.user_id == user.telegram_id)
+        .where(Ad.created_at >= thirty_days_ago)
+    )
+    publications_count = result.scalar() or 0
+
+    # Проверяем купленные доп. публикации (ещё не использованные)
+    result = await session.execute(
+        select(func.sum(UserServicePurchase.quantity))
+        .where(UserServicePurchase.user_id == user.id)
+        .where(UserServicePurchase.service_code == "extra_publication")
+        .where(UserServicePurchase.is_active == True)
+    )
+    purchased_publications = result.scalar() or 0
+
+    total_allowed = max_publications + purchased_publications
+
+    if publications_count >= total_allowed:
+        # Лимит исчерпан, нужна оплата
+        extra_prices = account_config.get("extra_prices", {})
+        price = extra_prices.get("extra_publication_price_rub", 10)
+        return True, "requires_payment", price
+
+    remaining = total_allowed - publications_count
+    logger.debug(f"User {user.telegram_id} publications: {publications_count}/{total_allowed}, remaining: {remaining}")
+
+    return True, "", None
+
+
+async def get_publication_stats(
+    user: "UserType",
+    session: AsyncSession
+) -> Dict[str, Any]:
+    """
+    Получить статистику публикаций пользователя за 30 дней.
+    """
+    limits = get_user_limits(user)
+    max_publications = limits.get("max_publications_per_30d", 30)
+
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+
+    result = await session.execute(
+        select(func.count(Ad.id))
+        .where(Ad.user_id == user.telegram_id)
+        .where(Ad.created_at >= thirty_days_ago)
+    )
+    publications_count = result.scalar() or 0
+
+    return {
+        "used": publications_count,
+        "limit": max_publications,
+        "remaining": max(0, max_publications - publications_count),
+        "period_start": thirty_days_ago,
+        "period_end": datetime.utcnow(),
+    }
 
 
 async def can_add_region(
@@ -293,6 +390,7 @@ async def check_service_availability(
 def format_limits_info(user: "UserType") -> str:
     """
     Форматирование информации о лимитах для отображения пользователю.
+    Синхронная версия (без статистики публикаций).
     """
     info = get_user_account_info(user)
     limits = info["limits"]
@@ -307,10 +405,60 @@ def format_limits_info(user: "UserType") -> str:
         else:
             lines.append(f"📅 Активна до: {info['expires_at'].strftime('%d.%m.%Y')}")
 
+    max_pubs = limits.get('max_publications_per_30d', 30)
+
     lines.extend([
         "",
         "📊 Лимиты:",
         f"• Объявлений: {limits['max_active_ads']} + {info['extra_ads_limit']} доп.",
+        f"• Публикаций в месяц: {max_pubs}",
+        f"• Срок публикации: {limits['ad_duration_days']} дней",
+        f"• Регионов: {limits['max_regions_per_ad']}",
+        f"• Ссылок: {limits['max_links_per_ad']}",
+        f"• Фото: {limits['max_photos_per_ad']}",
+        f"• Видео: {'✅' if limits['video_allowed'] else '❌ (платно)'}",
+    ])
+
+    return "\n".join(lines)
+
+
+async def format_limits_info_async(
+    user: "UserType",
+    session: AsyncSession
+) -> str:
+    """
+    Форматирование информации о лимитах с актуальной статистикой публикаций.
+    """
+    info = get_user_account_info(user)
+    limits = info["limits"]
+
+    lines = [
+        f"{info['emoji']} Аккаунт: {info['name']}",
+    ]
+
+    if info["expires_at"] and info["type"] != "free":
+        if info["is_expired"]:
+            lines.append("⚠️ Подписка истекла")
+        else:
+            lines.append(f"📅 Активна до: {info['expires_at'].strftime('%d.%m.%Y')}")
+
+    # Получаем статистику публикаций
+    pub_stats = await get_publication_stats(user, session)
+
+    # Считаем активные объявления
+    result = await session.execute(
+        select(func.count(Ad.id))
+        .where(Ad.user_id == user.telegram_id)
+        .where(Ad.status.in_([AdStatus.ACTIVE.value, AdStatus.PENDING.value]))
+    )
+    active_count = result.scalar() or 0
+    max_ads = limits['max_active_ads'] + (info['extra_ads_limit'] or 0)
+
+    lines.extend([
+        "",
+        "📊 Лимиты:",
+        f"• Объявлений: {active_count}/{max_ads}",
+        f"• Публикаций за 30 дней: {pub_stats['used']}/{pub_stats['limit']}",
         f"• Срок публикации: {limits['ad_duration_days']} дней",
         f"• Регионов: {limits['max_regions_per_ad']}",
         f"• Ссылок: {limits['max_links_per_ad']}",

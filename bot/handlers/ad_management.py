@@ -653,3 +653,162 @@ async def process_new_price(message: Message, state: FSMContext):
             logger.error(f"Ошибка обновления цены: {e}")
             await state.clear()
             await message.answer("❌ Ошибка сохранения. Попробуйте позже.", reply_markup=get_back_keyboard())
+
+
+# =========================================================================
+# ОБРАБОТЧИКИ ПРОДЛЕНИЯ И СНЯТИЯ ОБЪЯВЛЕНИЙ
+# =========================================================================
+
+@router.callback_query(F.data.startswith("extend_ad:"))
+async def callback_extend_ad(callback: CallbackQuery):
+    """Продлить объявление (кнопка из уведомления)"""
+    ad_id = callback.data.replace("extend_ad:", "")
+    
+    await callback.answer("⏳ Продлеваю объявление...")
+    
+    try:
+        async with get_db_session() as session:
+            from bot.services.ad_lifecycle import AdLifecycleService
+            import uuid
+            
+            # Получаем объявление
+            result = await session.execute(
+                select(Ad).where(Ad.id == uuid.UUID(ad_id))
+            )
+            ad = result.scalar_one_or_none()
+            
+            if not ad:
+                await callback.message.edit_text("❌ Объявление не найдено")
+                return
+            
+            if ad.status != AdStatus.ACTIVE.value:
+                await callback.message.edit_text("❌ Объявление уже не активно")
+                return
+            
+            # Продлеваем
+            service = AdLifecycleService(callback.bot, session)
+            success, message = await service.extend_ad(ad)
+            
+            if success:
+                # Формируем ссылку на новое объявление
+                channel_ids = ad.channel_message_ids or {}
+                ad_link = None
+                for channel, msg_ids in channel_ids.items():
+                    first_msg_id = msg_ids[0] if isinstance(msg_ids, list) else msg_ids
+                    if channel.startswith("@"):
+                        ad_link = f"https://t.me/{channel[1:]}/{first_msg_id}"
+                        break
+                
+                link_text = f'\n\n<a href="{ad_link}">Открыть объявление</a>' if ad_link else ""
+                
+                await callback.message.edit_text(
+                    f"✅ <b>Объявление продлено!</b>\n\n"
+                    f"📋 {ad.title}\n"
+                    f"⏳ Новый срок: до {ad.expires_at.strftime('%d.%m.%Y')}{link_text}",
+                    disable_web_page_preview=True
+                )
+            else:
+                await callback.message.edit_text(f"❌ Ошибка: {message}")
+                
+    except Exception as e:
+        logger.error(f"Ошибка продления: {e}")
+        await callback.message.edit_text("❌ Произошла ошибка. Попробуйте позже.")
+
+
+@router.callback_query(F.data.startswith("archive_ad:"))
+async def callback_archive_ad(callback: CallbackQuery):
+    """Снять объявление с публикации (кнопка из уведомления)"""
+    ad_id = callback.data.replace("archive_ad:", "")
+    
+    await callback.answer("⏳ Снимаю объявление...")
+    
+    try:
+        async with get_db_session() as session:
+            from bot.services.ad_lifecycle import AdLifecycleService
+            import uuid
+            
+            # Получаем объявление
+            result = await session.execute(
+                select(Ad).where(Ad.id == uuid.UUID(ad_id))
+            )
+            ad = result.scalar_one_or_none()
+            
+            if not ad:
+                await callback.message.edit_text("❌ Объявление не найдено")
+                return
+            
+            if ad.status != AdStatus.ACTIVE.value:
+                await callback.message.edit_text("❌ Объявление уже не активно")
+                return
+            
+            # Перемещаем в архив
+            service = AdLifecycleService(callback.bot, session)
+            success = await service.move_to_archive(ad)
+            await session.commit()
+            
+            if success:
+                await callback.message.edit_text(
+                    f"✅ <b>Объявление снято с публикации</b>\n\n"
+                    f"📋 {ad.title}\n\n"
+                    f"Объявление перемещено в архив.\n"
+                    f"Вы можете восстановить его в разделе «Мои объявления»."
+                )
+            else:
+                await callback.message.edit_text("❌ Ошибка снятия объявления")
+                
+    except Exception as e:
+        logger.error(f"Ошибка снятия: {e}")
+        await callback.message.edit_text("❌ Произошла ошибка. Попробуйте позже.")
+
+
+@router.callback_query(F.data.startswith("boost_ad:"))
+async def callback_boost_ad(callback: CallbackQuery):
+    """Поднять объявление (платная услуга)"""
+    ad_id = callback.data.replace("boost_ad:", "")
+    
+    await callback.answer("⏳ Поднимаю объявление...")
+    
+    try:
+        async with get_db_session() as session:
+            from bot.services.ad_lifecycle import AdLifecycleService
+            import uuid
+            
+            result = await session.execute(
+                select(Ad).where(Ad.id == uuid.UUID(ad_id))
+            )
+            ad = result.scalar_one_or_none()
+            
+            if not ad:
+                await callback.message.edit_text("❌ Объявление не найдено")
+                return
+            
+            if ad.status != AdStatus.ACTIVE.value:
+                await callback.message.edit_text("❌ Объявление не активно")
+                return
+            
+            service = AdLifecycleService(callback.bot, session)
+            success, message = await service.boost_ad(ad)
+            
+            if success:
+                # Формируем ссылку
+                channel_ids = ad.channel_message_ids or {}
+                ad_link = None
+                for channel, msg_ids in channel_ids.items():
+                    first_msg_id = msg_ids[0] if isinstance(msg_ids, list) else msg_ids
+                    if channel.startswith("@"):
+                        ad_link = f"https://t.me/{channel[1:]}/{first_msg_id}"
+                        break
+                
+                link_text = f'\n\n<a href="{ad_link}">Открыть объявление</a>' if ad_link else ""
+                
+                await callback.message.edit_text(
+                    f"🚀 <b>Объявление поднято!</b>\n\n"
+                    f"📋 {ad.title}{link_text}",
+                    disable_web_page_preview=True
+                )
+            else:
+                await callback.message.edit_text(f"❌ Ошибка: {message}")
+                
+    except Exception as e:
+        logger.error(f"Ошибка поднятия: {e}")
+        await callback.message.edit_text("❌ Произошла ошибка. Попробуйте позже.")

@@ -142,19 +142,24 @@ async def ad_lifecycle_task(bot: Bot):
 
     Выполняет:
     1. Каждый час: проверка истёкших объявлений → перемещение в архив
-    2. Каждый день в 10:00 МСК: уведомления об истекающих объявлениях
-    3. Каждый день в 3:00 МСК: полная архивация старых неактивных (6 мес)
+    2. Каждый час: автоподнятие объявлений (boost)
+    3. Каждый день в 10:00 МСК: уведомления на 28 и 29 день
+    4. Каждые 15 минут: финальные уведомления за 1 час до удаления
+    5. Каждый день в 3:00 МСК: полная архивация старых (90 дней)
     """
     from datetime import datetime, time as dt_time
     import pytz
     from sqlalchemy import select
+    from bot.config.pricing import AD_LIFECYCLE_CONFIG
 
     msk = pytz.timezone('Europe/Moscow')
     last_expiry_check = None
+    last_boost_check = None
     last_notification_day = None
+    last_final_notification_check = None
     last_archive_cleanup_day = None
 
-    # Ждём 30 секунд после старта чтобы бот полностью инициализировался
+    # Ждём 30 секунд после старта
     await asyncio.sleep(30)
     logger.info("[LIFECYCLE] Фоновая задача запущена")
 
@@ -174,31 +179,73 @@ async def ad_lifecycle_task(bot: Bot):
                         logger.info(f"[LIFECYCLE] Перемещено в архив: {processed}")
                 last_expiry_check = now
 
-            # 2. УВЕДОМЛЕНИЯ ОБ ИСТЕЧЕНИИ (в 10:00 МСК, раз в день)
-            if current_hour == 10 and last_notification_day != current_date:
-                logger.info("[LIFECYCLE] Отправка уведомлений об истечении...")
+            # 2. АВТОПОДНЯТИЕ ОБЪЯВЛЕНИЙ (каждый час)
+            if last_boost_check is None or (now - last_boost_check).total_seconds() >= 3600:
                 async with get_session() as session:
                     service = AdLifecycleService(bot, session)
-                    ads = await service.get_ads_expiring_soon()
+                    boosted = await service.process_auto_boosts()
+                    if boosted > 0:
+                        logger.info(f"[LIFECYCLE] Автоподнято: {boosted}")
+                last_boost_check = now
+
+            # 3. УВЕДОМЛЕНИЯ НА 28 И 29 ДЕНЬ (в 10:00 МСК)
+            notification_config = AD_LIFECYCLE_CONFIG["notifications"]
+            send_hour = notification_config.get("send_time_hour_msk", 10)
+
+            if current_hour == send_hour and last_notification_day != current_date:
+                logger.info("[LIFECYCLE] Отправка уведомлений на 28/29 день...")
+                async with get_session() as session:
+                    service = AdLifecycleService(bot, session)
+
+                    total_sent = 0
+                    warn_days = notification_config.get("warn_days", [2, 1])
+
+                    for days_before in warn_days:
+                        ads = await service.get_ads_for_notification(days_before)
+                        for ad in ads:
+                            user_result = await session.execute(
+                                select(User).where(User.telegram_id == ad.user_id)
+                            )
+                            user = user_result.scalar_one_or_none()
+                            if user:
+                                success = await service.send_expiry_notification(
+                                    ad, user, days_left=days_before, is_final=False
+                                )
+                                if success:
+                                    total_sent += 1
+
+                    if total_sent > 0:
+                        await session.commit()
+                        logger.info(f"[LIFECYCLE] Отправлено уведомлений: {total_sent}")
+
+                last_notification_day = current_date
+
+            # 4. ФИНАЛЬНЫЕ УВЕДОМЛЕНИЯ ЗА 1 ЧАС (каждые 15 минут)
+            if last_final_notification_check is None or (now - last_final_notification_check).total_seconds() >= 900:
+                async with get_session() as session:
+                    service = AdLifecycleService(bot, session)
+                    ads = await service.get_ads_for_final_notification()
 
                     sent_count = 0
                     for ad in ads:
-                        # Получаем пользователя
                         user_result = await session.execute(
                             select(User).where(User.telegram_id == ad.user_id)
                         )
                         user = user_result.scalar_one_or_none()
-                        if user and user.notification_enabled:
-                            success = await service.send_expiry_notification(ad, user)
+                        if user:
+                            success = await service.send_expiry_notification(
+                                ad, user, days_left=0, is_final=True
+                            )
                             if success:
                                 sent_count += 1
 
                     if sent_count > 0:
-                        logger.info(f"[LIFECYCLE] Отправлено уведомлений: {sent_count}")
+                        await session.commit()
+                        logger.info(f"[LIFECYCLE] Финальных уведомлений: {sent_count}")
 
-                last_notification_day = current_date
+                last_final_notification_check = now
 
-            # 3. ПОЛНАЯ АРХИВАЦИЯ СТАРЫХ (в 3:00 МСК, раз в день)
+            # 5. ПОЛНАЯ АРХИВАЦИЯ СТАРЫХ (в 3:00 МСК)
             if current_hour == 3 and last_archive_cleanup_day != current_date:
                 logger.info("[LIFECYCLE] Архивация старых неактивных объявлений...")
                 async with get_session() as session:
@@ -214,7 +261,7 @@ async def ad_lifecycle_task(bot: Bot):
 
         except Exception as e:
             logger.error(f"[LIFECYCLE] Ошибка в ad_lifecycle_task: {e}")
-            await asyncio.sleep(600)  # При ошибке ждём 10 минут
+            await asyncio.sleep(600)
 
 
 async def on_startup(bot: Bot):
