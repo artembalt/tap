@@ -23,8 +23,9 @@ ACCOUNT_TYPES: Dict[str, Dict[str, Any]] = {
         "price_rub": 0,
         "duration_days": None,  # Бессрочно
         "limits": {
-            "max_active_ads": 100,           # Макс. активных объявлений
-            "ad_duration_days": 1,           # Срок публикации (ТЕСТ: 1 день)
+            "max_active_ads": 90,            # Макс. активных объявлений
+            "ad_duration_days": 30,          # Срок публикации объявления
+            "max_publications_per_30d": 30,  # Макс. публикаций за 30 дней
             "max_regions_per_ad": 1,         # Регионов на объявление
             "max_links_per_ad": 1,           # Бесплатных ссылок
             "max_photos_per_ad": 5,          # Фото в объявлении
@@ -32,6 +33,13 @@ ACCOUNT_TYPES: Dict[str, Dict[str, Any]] = {
             "priority_moderation": False,    # Быстрая модерация
             "statistics": "basic",           # basic / extended
             "support_priority": "normal",    # normal / high
+            "boost_now_included": 0,         # Бесплатных поднятий "сейчас"
+            "boost_4x_6d_included": 0,       # Бесплатных услуг "4 раза каждые 6 дней"
+            "boost_2x_10d_included": 0,      # Бесплатных услуг "2 раза каждые 10 дней"
+        },
+        "extra_prices": {
+            "extra_ad_price_rub": 10,        # Цена за доп. объявление сверх лимита
+            "extra_publication_price_rub": 10,  # Цена за доп. публикацию сверх лимита
         },
         "features": [],
         "description": "Базовый аккаунт для размещения объявлений",
@@ -43,8 +51,9 @@ ACCOUNT_TYPES: Dict[str, Dict[str, Any]] = {
         "price_rub": 199,
         "duration_days": 30,
         "limits": {
-            "max_active_ads": 500,
-            "ad_duration_days": 60,
+            "max_active_ads": 150,
+            "ad_duration_days": 30,
+            "max_publications_per_30d": 50,
             "max_regions_per_ad": 3,
             "max_links_per_ad": 2,
             "max_photos_per_ad": 10,
@@ -52,29 +61,77 @@ ACCOUNT_TYPES: Dict[str, Dict[str, Any]] = {
             "priority_moderation": False,
             "statistics": "extended",
             "support_priority": "normal",
+            "boost_now_included": 1,
+            "boost_4x_6d_included": 0,
+            "boost_2x_10d_included": 0,
+        },
+        "extra_prices": {
+            "extra_ad_price_rub": 9,
+            "extra_publication_price_rub": 9,
         },
         "features": ["badge_pro"],
         "description": "Для активных продавцов",
     },
 
-    "business": {
-        "name": "Бизнес",
+    # -------------------------------------------------------------------------
+    # ПАКЕТНЫЕ ТАРИФЫ
+    # -------------------------------------------------------------------------
+    "business_subscription": {
+        "name": "Бизнес (подписка)",
         "emoji": "💼",
-        "price_rub": 499,
+        "price_rub": 999,
         "duration_days": 30,
+        "is_subscription": True,  # Автопродление
         "limits": {
-            "max_active_ads": 1000,
-            "ad_duration_days": 90,
-            "max_regions_per_ad": 10,
+            "max_active_ads": 300,
+            "ad_duration_days": 30,
+            "max_publications_per_30d": 90,
+            "max_regions_per_ad": 5,
             "max_links_per_ad": 4,
-            "max_photos_per_ad": 15,
+            "max_photos_per_ad": 10,
             "video_allowed": True,
             "priority_moderation": True,
             "statistics": "extended",
             "support_priority": "high",
+            "boost_now_included": 3,         # 3 бесплатных поднятия "сейчас"
+            "boost_4x_6d_included": 1,       # 1 бесплатная услуга "4 раза каждые 6 дней"
+            "boost_2x_10d_included": 1,      # 1 бесплатная услуга "2 раза каждые 10 дней"
+        },
+        "extra_prices": {
+            "extra_ad_price_rub": 7,
+            "extra_publication_price_rub": 7,
         },
         "features": ["badge_business", "priority_support", "analytics_pro"],
-        "description": "Для бизнеса и профессионалов",
+        "description": "Подписка для бизнеса с автопродлением",
+    },
+
+    "business_pack": {
+        "name": "Бизнес (пакет)",
+        "emoji": "📦",
+        "price_rub": 999,
+        "duration_days": 30,
+        "is_subscription": False,  # Разовая покупка
+        "limits": {
+            "max_active_ads": 300,
+            "ad_duration_days": 30,
+            "max_publications_per_30d": 90,
+            "max_regions_per_ad": 5,
+            "max_links_per_ad": 4,
+            "max_photos_per_ad": 10,
+            "video_allowed": True,
+            "priority_moderation": True,
+            "statistics": "extended",
+            "support_priority": "high",
+            "boost_now_included": 3,
+            "boost_4x_6d_included": 1,
+            "boost_2x_10d_included": 1,
+        },
+        "extra_prices": {
+            "extra_ad_price_rub": 7,
+            "extra_publication_price_rub": 7,
+        },
+        "features": ["badge_business", "priority_support", "analytics_pro"],
+        "description": "Пакет для бизнеса на 30 дней",
     },
 }
 
@@ -139,41 +196,31 @@ PAID_SERVICES: Dict[str, Dict[str, Any]] = {
     },
 
     # -------------------------------------------------------------------------
-    # Продвижение
+    # Поднятие объявлений
     # -------------------------------------------------------------------------
-    "boost_up": {
-        "name": "Поднять объявление",
-        "description": "Поднять объявление в ленте канала",
+    "boost_now": {
+        "name": "Поднять сейчас",
+        "description": "Поднять объявление в начало ленты канала прямо сейчас",
         "category": "promotion",
-        "price_rub": 19,
-        "cooldown_hours": 24,  # Минимум 24ч между поднятиями
+        "price_rub": 100,
         "is_active": True,
     },
-    "auto_republish_7d": {
-        "name": "Автоподнятие каждые 7 дней",
-        "description": "Автоматическая переопубликация объявления каждые 7 дней",
+    "boost_4x_6d": {
+        "name": "Поднимать 4 раза (каждые 6 дней)",
+        "description": "Автоматическое поднятие объявления каждые 6 дней в течение 30 дней",
         "category": "promotion",
-        "price_rub": 99,
-        "interval_days": 7,        # Интервал поднятия
-        "duration_days": 30,       # На какой срок покупается услуга
+        "price_rub": 300,
+        "boost_count": 4,          # Количество поднятий
+        "interval_days": 6,        # Интервал между поднятиями
         "is_active": True,
     },
-    "auto_republish_3d": {
-        "name": "Автоподнятие каждые 3 дня",
-        "description": "Автоматическая переопубликация объявления каждые 3 дня",
+    "boost_2x_10d": {
+        "name": "Поднимать 2 раза (каждые 10 дней)",
+        "description": "Автоматическое поднятие объявления каждые 10 дней в течение 30 дней",
         "category": "promotion",
-        "price_rub": 199,
-        "interval_days": 3,
-        "duration_days": 30,
-        "is_active": True,
-    },
-    "auto_republish_1d": {
-        "name": "Автоподнятие каждый день",
-        "description": "Ежедневная автоматическая переопубликация объявления",
-        "category": "promotion",
-        "price_rub": 399,
-        "interval_days": 1,
-        "duration_days": 30,
+        "price_rub": 150,
+        "boost_count": 2,          # Количество поднятий
+        "interval_days": 10,       # Интервал между поднятиями
         "is_active": True,
     },
     "pin_channel_1h": {
