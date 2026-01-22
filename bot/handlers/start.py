@@ -913,13 +913,18 @@ async def show_edit_menu(message: Message, ad_id: str):
         await message.answer("❌ Это не ваше объявление.", reply_markup=get_main_reply_keyboard())
         return
 
-    ad_title = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
+    ad_title = ad.title
 
     # Формируем цену
     if ad.price:
         price_text = f"{int(ad.price):,}".replace(",", " ") + " ₽"
     else:
         price_text = "Договорная"
+
+    # Описание (обрезаем если длинное)
+    description = ad.description or ""
+    if len(description) > 300:
+        description = description[:300] + "..."
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Изменить заголовок", callback_data=f"edit_title_{ad_id}")],
@@ -930,8 +935,9 @@ async def show_edit_menu(message: Message, ad_id: str):
 
     await message.answer(
         f"✏️ <b>Редактирование объявления</b>\n\n"
-        f"📌 {ad_title}\n"
-        f"₽ {price_text}\n\n"
+        f"<b>Заголовок:</b> {ad_title}\n\n"
+        f"<b>Описание:</b>\n{description}\n\n"
+        f"<b>Цена:</b> {price_text}\n\n"
         f"Выберите что изменить:",
         reply_markup=keyboard
     )
