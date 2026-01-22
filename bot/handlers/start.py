@@ -1097,10 +1097,10 @@ async def show_republish_menu(message: Message, ad_id: str):
         await message.answer("❌ Это не ваше объявление.", reply_markup=get_main_reply_keyboard())
         return
 
-    if ad.status != "inactive":
+    if ad.status not in ["inactive", "deleted", "pending"]:
         await message.answer(
             "ℹ️ Это объявление не требует переопубликации.\n"
-            "Переопубликация доступна только для неактивных объявлений.",
+            "Переопубликация доступна для неактивных, на модерации и удалённых объявлений.",
             reply_markup=get_main_reply_keyboard()
         )
         return
@@ -1163,7 +1163,7 @@ async def callback_republish_confirm(callback: CallbackQuery):
             await callback.answer("❌ Это не ваше объявление", show_alert=True)
             return
 
-        if ad.status != "inactive":
+        if ad.status not in ["inactive", "deleted", "pending"]:
             await callback.answer("ℹ️ Объявление уже активно", show_alert=True)
             return
 
