@@ -977,18 +977,30 @@ async def show_own_ad_preview(message: Message, ad_id: str):
 """
 
     # Кнопки зависят от статуса
+    # Используем deep link для перехода в меню редактирования с фото
+    from bot.config import settings
+    bot_username = settings.BOT_USERNAME
+    edit_link = f"https://t.me/{bot_username}?start=edit_{ad_id}"
+
     buttons = []
 
     if ad.status == "inactive":
-        buttons.append([InlineKeyboardButton(text="✏️ Изменить", callback_data=f"edit_title_{ad_id}")])
-        buttons.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"ad_del_confirm_{ad_id}")])
+        buttons.append([
+            InlineKeyboardButton(text="✏️ Изменить", url=edit_link),
+            InlineKeyboardButton(text="🗑 Удалить", callback_data=f"ad_del_confirm_{ad_id}")
+        ])
         buttons.append([InlineKeyboardButton(text="📋 К категориям", callback_data="my_ads")])
     elif ad.status == "pending":
-        buttons.append([InlineKeyboardButton(text="✏️ Изменить", callback_data=f"edit_title_{ad_id}")])
-        buttons.append([InlineKeyboardButton(text="🔄 Опубликовать", callback_data=f"republish_confirm_{ad_id}")])
+        buttons.append([
+            InlineKeyboardButton(text="✏️ Изменить", url=edit_link),
+            InlineKeyboardButton(text="🔄 Опубликовать", callback_data=f"republish_confirm_{ad_id}")
+        ])
         buttons.append([InlineKeyboardButton(text="📋 К категориям", callback_data="my_ads")])
     elif ad.status == "deleted":
-        buttons.append([InlineKeyboardButton(text="🔄 Опубликовать", callback_data=f"republish_confirm_{ad_id}")])
+        buttons.append([
+            InlineKeyboardButton(text="✏️ Изменить", url=edit_link),
+            InlineKeyboardButton(text="🔄 Опубликовать", callback_data=f"republish_confirm_{ad_id}")
+        ])
         buttons.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"ad_remove_confirm_{ad_id}")])
         buttons.append([InlineKeyboardButton(text="📋 К категориям", callback_data="my_ads")])
     else:
@@ -1031,7 +1043,9 @@ async def show_own_ad_preview(message: Message, ad_id: str):
 
 
 async def show_edit_menu(message: Message, ad_id: str):
-    """Показать меню редактирования объявления"""
+    """Показать меню редактирования объявления с фото/видео"""
+    from aiogram.types import InputMediaPhoto
+
     user_id = message.from_user.id
 
     # Получаем объявление
@@ -1058,21 +1072,59 @@ async def show_edit_menu(message: Message, ad_id: str):
     if len(description) > 300:
         description = description[:300] + "..."
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+    # Информация о медиа
+    photos = ad.photos or []
+    has_video = bool(ad.video)
+    media_info = ""
+    if photos:
+        media_info = f"📷 Фото: {len(photos)} шт."
+    elif has_video:
+        media_info = "🎬 Видео: 1 шт."
+    else:
+        media_info = "📷 Медиа: нет"
+
+    # Кнопки редактирования
+    buttons = [
         [InlineKeyboardButton(text="✏️ Изменить заголовок", callback_data=f"edit_title_{ad_id}")],
         [InlineKeyboardButton(text="📝 Изменить описание", callback_data=f"edit_desc_{ad_id}")],
         [InlineKeyboardButton(text="💰 Изменить цену", callback_data=f"edit_price_{ad_id}")],
+        [InlineKeyboardButton(text="📷 Заменить фото/видео", callback_data=f"edit_media_{ad_id}")],
         [InlineKeyboardButton(text="◀️ Назад к объявлениям", callback_data="my_ads")]
-    ])
+    ]
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    await message.answer(
+    text = (
         f"✏️ <b>Редактирование объявления</b>\n\n"
         f"<b>Заголовок:</b> {ad_title}\n\n"
         f"<b>Описание:</b>\n{description}\n\n"
-        f"<b>Цена:</b> {price_text}\n\n"
-        f"Выберите что изменить:",
-        reply_markup=keyboard
+        f"<b>Цена:</b> {price_text}\n"
+        f"<b>{media_info}</b>\n\n"
+        f"Выберите что изменить:"
     )
+
+    # Если есть фото - показываем с ними
+    if photos:
+        if len(photos) == 1:
+            await message.answer_photo(
+                photo=photos[0],
+                caption=text,
+                reply_markup=keyboard
+            )
+        else:
+            # Медиагруппа + отдельное сообщение с кнопками
+            media_group = [InputMediaPhoto(media=photos[0], caption=f"📷 Фото объявления ({len(photos)} шт.)")]
+            for photo in photos[1:10]:
+                media_group.append(InputMediaPhoto(media=photo))
+            await message.answer_media_group(media=media_group)
+            await message.answer(text, reply_markup=keyboard)
+    elif has_video:
+        await message.answer_video(
+            video=ad.video,
+            caption=text,
+            reply_markup=keyboard
+        )
+    else:
+        await message.answer(text, reply_markup=keyboard)
 
 
 # =============================================================================

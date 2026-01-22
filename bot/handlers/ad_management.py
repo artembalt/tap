@@ -145,6 +145,7 @@ class EditAdStates(StatesGroup):
     waiting_for_new_title = State()
     waiting_for_new_description = State()
     waiting_for_new_price = State()
+    waiting_for_new_media = State()  # Для замены фото/видео
 
 
 def get_my_ads_keyboard(offset: int, total: int, status: str = None) -> InlineKeyboardMarkup:
@@ -550,6 +551,132 @@ async def start_edit_price(callback: CallbackQuery, state: FSMContext):
         reply_markup=keyboard
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("edit_media_"))
+async def start_edit_media(callback: CallbackQuery, state: FSMContext):
+    """Начать замену фото/видео"""
+    ad_id = callback.data.replace("edit_media_", "")
+
+    await state.update_data(edit_ad_id=ad_id, new_photos=[], new_video=None)
+    await state.set_state(EditAdStates.waiting_for_new_media)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Сохранить медиа", callback_data=f"save_media_{ad_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads")]
+    ])
+
+    await callback.message.answer(
+        "📷 <b>Замена фото/видео</b>\n\n"
+        "Отправьте новые фото (до 10 шт.) или одно видео.\n\n"
+        "⚠️ Старые медиа будут заменены новыми.\n\n"
+        "После загрузки всех медиа нажмите «✅ Сохранить медиа»",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.message(EditAdStates.waiting_for_new_media, F.photo)
+async def process_new_photo(message: Message, state: FSMContext):
+    """Обработка нового фото"""
+    data = await state.get_data()
+    photos = data.get("new_photos", [])
+
+    if len(photos) >= 10:
+        await message.answer("⚠️ Максимум 10 фото. Нажмите «✅ Сохранить медиа» для сохранения.")
+        return
+
+    # Берём фото максимального размера
+    photo_id = message.photo[-1].file_id
+    photos.append(photo_id)
+    await state.update_data(new_photos=photos, new_video=None)
+
+    ad_id = data.get("edit_ad_id")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Сохранить медиа", callback_data=f"save_media_{ad_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads")]
+    ])
+
+    await message.answer(
+        f"✅ Фото добавлено ({len(photos)}/10)\n\n"
+        f"Отправьте ещё фото или нажмите «✅ Сохранить медиа»",
+        reply_markup=keyboard
+    )
+
+
+@router.message(EditAdStates.waiting_for_new_media, F.video)
+async def process_new_video(message: Message, state: FSMContext):
+    """Обработка нового видео"""
+    video_id = message.video.file_id
+    await state.update_data(new_video=video_id, new_photos=[])
+
+    data = await state.get_data()
+    ad_id = data.get("edit_ad_id")
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Сохранить медиа", callback_data=f"save_media_{ad_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads")]
+    ])
+
+    await message.answer(
+        "✅ Видео добавлено\n\n"
+        "Нажмите «✅ Сохранить медиа» для сохранения",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("save_media_"))
+async def save_new_media(callback: CallbackQuery, state: FSMContext):
+    """Сохранить новые медиа"""
+    ad_id = callback.data.replace("save_media_", "")
+    user_id = callback.from_user.id
+
+    data = await state.get_data()
+    new_photos = data.get("new_photos", [])
+    new_video = data.get("new_video")
+
+    if not new_photos and not new_video:
+        await callback.answer("❌ Сначала отправьте фото или видео", show_alert=True)
+        return
+
+    try:
+        async with get_db_session() as session:
+            from sqlalchemy import update
+            import uuid
+
+            # Обновляем медиа в БД
+            values = {}
+            if new_photos:
+                values["photos"] = new_photos
+                values["video"] = None
+            elif new_video:
+                values["video"] = new_video
+                values["photos"] = []
+
+            stmt = update(Ad).where(Ad.id == uuid.UUID(ad_id)).values(**values)
+            await session.execute(stmt)
+            await session.commit()
+
+        await state.clear()
+
+        media_type = "фото" if new_photos else "видео"
+        count = len(new_photos) if new_photos else 1
+
+        await callback.answer(f"✅ Медиа обновлены ({count} {media_type})", show_alert=False)
+        await callback.message.edit_text(
+            f"✅ <b>Медиа обновлены!</b>\n\n"
+            f"Загружено: {count} {media_type}\n\n"
+            f"⚠️ Изменения применены в базе данных.\n"
+            f"Для обновления в каналах переопубликуйте объявление.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📋 К объявлениям", callback_data="my_ads")]
+            ])
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка сохранения медиа: {e}")
+        await state.clear()
+        await callback.answer("❌ Ошибка сохранения", show_alert=True)
 
 
 @router.message(EditAdStates.waiting_for_new_title)
