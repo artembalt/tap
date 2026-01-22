@@ -663,14 +663,16 @@ async def process_new_price(message: Message, state: FSMContext):
 async def callback_extend_ad(callback: CallbackQuery):
     """Продлить объявление (кнопка из уведомления)"""
     ad_id = callback.data.replace("extend_ad:", "")
-    
+
     await callback.answer("⏳ Продлеваю объявление...")
-    
+
     try:
         async with get_db_session() as session:
             from bot.services.ad_lifecycle import AdLifecycleService
+            from bot.database.models import Ad, AdStatus
+            from sqlalchemy import select
             import uuid
-            
+
             # Получаем объявление
             result = await session.execute(
                 select(Ad).where(Ad.id == uuid.UUID(ad_id))
@@ -719,14 +721,16 @@ async def callback_extend_ad(callback: CallbackQuery):
 async def callback_archive_ad(callback: CallbackQuery):
     """Снять объявление с публикации (кнопка из уведомления)"""
     ad_id = callback.data.replace("archive_ad:", "")
-    
+
     await callback.answer("⏳ Снимаю объявление...")
-    
+
     try:
         async with get_db_session() as session:
             from bot.services.ad_lifecycle import AdLifecycleService
+            from bot.database.models import Ad, AdStatus
+            from sqlalchemy import select
             import uuid
-            
+
             # Получаем объявление
             result = await session.execute(
                 select(Ad).where(Ad.id == uuid.UUID(ad_id))
@@ -765,14 +769,16 @@ async def callback_archive_ad(callback: CallbackQuery):
 async def callback_boost_ad(callback: CallbackQuery):
     """Поднять объявление (платная услуга)"""
     ad_id = callback.data.replace("boost_ad:", "")
-    
+
     await callback.answer("⏳ Поднимаю объявление...")
-    
+
     try:
         async with get_db_session() as session:
             from bot.services.ad_lifecycle import AdLifecycleService
+            from bot.database.models import Ad, AdStatus
+            from sqlalchemy import select
             import uuid
-            
+
             result = await session.execute(
                 select(Ad).where(Ad.id == uuid.UUID(ad_id))
             )
