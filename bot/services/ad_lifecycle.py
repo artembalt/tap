@@ -187,11 +187,12 @@ class AdLifecycleService:
                     msg = await self.bot.send_photo(
                         chat_id=archive_channel,
                         photo=photos[0],
-                        caption=text
+                        caption=text,
+                        parse_mode='HTML'
                     )
                     message_ids = [msg.message_id]
                 else:
-                    media = [InputMediaPhoto(media=photos[0], caption=text)]
+                    media = [InputMediaPhoto(media=photos[0], caption=text, parse_mode='HTML')]
                     for p in photos[1:10]:
                         media.append(InputMediaPhoto(media=p))
                     msgs = await self.bot.send_media_group(chat_id=archive_channel, media=media)
@@ -200,13 +201,15 @@ class AdLifecycleService:
                 msg = await self.bot.send_video(
                     chat_id=archive_channel,
                     video=ad.video,
-                    caption=text
+                    caption=text,
+                    parse_mode='HTML'
                 )
                 message_ids = [msg.message_id]
             else:
                 msg = await self.bot.send_message(
                     chat_id=archive_channel,
                     text=text,
+                    parse_mode='HTML',
                     disable_web_page_preview=True
                 )
                 message_ids = [msg.message_id]
@@ -493,6 +496,7 @@ class AdLifecycleService:
                 chat_id=user.telegram_id,
                 text=text,
                 reply_markup=keyboard,
+                parse_mode='HTML',
                 disable_web_page_preview=True
             )
 
