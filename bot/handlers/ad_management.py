@@ -147,34 +147,37 @@ class EditAdStates(StatesGroup):
     waiting_for_new_price = State()
 
 
-def get_my_ads_keyboard(offset: int, total: int) -> InlineKeyboardMarkup:
-    """Клавиатура для пагинации объявлений"""
+def get_my_ads_keyboard(offset: int, total: int, status: str = None) -> InlineKeyboardMarkup:
+    """Клавиатура для пагинации объявлений с фильтром по статусу"""
     buttons = []
 
     # Навигация по страницам
     nav_row = []
+
+    # Формат callback_data: my_ads_page_{status}_{offset}
+    status_part = f"{status}_" if status else ""
 
     # Кнопка "Назад" на предыдущую страницу
     if offset > 0:
         prev_offset = max(0, offset - ADS_PER_PAGE)
         nav_row.append(InlineKeyboardButton(
             text="◀️ Назад",
-            callback_data=f"my_ads_page_{prev_offset}"
+            callback_data=f"my_ads_page_{status_part}{prev_offset}"
         ))
 
     # Кнопка "Далее" если есть ещё объявления
     if offset + ADS_PER_PAGE < total:
         nav_row.append(InlineKeyboardButton(
             text="Далее ▶️",
-            callback_data=f"my_ads_page_{offset + ADS_PER_PAGE}"
+            callback_data=f"my_ads_page_{status_part}{offset + ADS_PER_PAGE}"
         ))
 
     if nav_row:
         buttons.append(nav_row)
 
-    # Кнопка в главное меню
+    # Кнопка возврата к категориям
     buttons.append([
-        InlineKeyboardButton(text="🏠 Главное меню", callback_data="back_to_menu")
+        InlineKeyboardButton(text="📋 К категориям", callback_data="my_ads")
     ])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -184,71 +187,157 @@ def get_my_ads_keyboard(offset: int, total: int) -> InlineKeyboardMarkup:
 # ПРОСМОТР СПИСКА СВОИХ ОБЪЯВЛЕНИЙ
 # =============================================================================
 
+# Маппинг статусов для меню
+ADS_CATEGORIES = {
+    "active": {"name": "Активные", "emoji": "✅", "status": "active"},
+    "inactive": {"name": "Неактивные", "emoji": "💤", "status": "inactive"},
+    "pending": {"name": "На модерации", "emoji": "⏳", "status": "pending"},
+    "deleted": {"name": "Удалённые", "emoji": "🗑", "status": "deleted"},
+}
+
+
 @router.message(Command("my_ads"))
 @router.message(F.text == "📋 Мои объявления")
 async def my_ads(message: Message):
-    """Показать список объявлений пользователя"""
+    """Показать меню категорий объявлений"""
     logger.info(f"my_ads вызван, user={message.from_user.id}")
-    await show_user_ads(message, message.from_user.id, offset=0)
+    await show_ads_categories_menu(message, message.from_user.id)
 
 
 @router.callback_query(F.data == "my_ads")
 async def callback_my_ads(callback: CallbackQuery):
-    """Показать список объявлений пользователя (через callback)"""
+    """Показать меню категорий объявлений (через callback)"""
     logger.info(f"callback_my_ads вызван, user={callback.from_user.id}")
-    await show_user_ads(callback.message, callback.from_user.id, offset=0, edit=True)
+    await show_ads_categories_menu(callback.message, callback.from_user.id, edit=True)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("my_ads_cat_"))
+async def callback_my_ads_category(callback: CallbackQuery):
+    """Показать объявления выбранной категории"""
+    category = callback.data.replace("my_ads_cat_", "")
+    logger.info(f"my_ads_category вызван, user={callback.from_user.id}, category={category}")
+
+    if category not in ADS_CATEGORIES:
+        await callback.answer("❌ Неизвестная категория")
+        return
+
+    status = ADS_CATEGORIES[category]["status"]
+    await show_user_ads(callback.message, callback.from_user.id, offset=0, status=status, edit=True)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("my_ads_page_"))
 async def callback_my_ads_page(callback: CallbackQuery):
     """Показать следующую страницу объявлений"""
-    offset = int(callback.data.replace("my_ads_page_", ""))
-    logger.info(f"my_ads_page вызван, user={callback.from_user.id}, offset={offset}")
-    await show_user_ads(callback.message, callback.from_user.id, offset=offset, edit=True)
+    # Формат: my_ads_page_{status}_{offset}
+    parts = callback.data.replace("my_ads_page_", "").split("_")
+    if len(parts) == 2:
+        status, offset = parts[0], int(parts[1])
+    else:
+        status, offset = None, int(parts[0])
+
+    logger.info(f"my_ads_page вызван, user={callback.from_user.id}, status={status}, offset={offset}")
+    await show_user_ads(callback.message, callback.from_user.id, offset=offset, status=status, edit=True)
     await callback.answer()
 
 
-async def show_user_ads(message: Message, user_id: int, offset: int = 0, edit: bool = False):
+async def show_ads_categories_menu(message: Message, user_id: int, edit: bool = False):
+    """Показать меню категорий объявлений с количеством"""
+    try:
+        counts = await AdQueries.get_user_ads_counts_by_status(user_id)
+    except Exception as e:
+        logger.error(f"Ошибка получения счётчиков: {e}")
+        counts = {"active": 0, "inactive": 0, "pending": 0, "deleted": 0}
+
+    total = sum(counts.values())
+
+    text = (
+        f"📋 <b>Мои объявления</b>\n\n"
+        f"Всего: {total}\n\n"
+        f"Выберите категорию:"
+    )
+
+    # Формируем кнопки с количеством
+    buttons = []
+    for key, cat in ADS_CATEGORIES.items():
+        count = counts.get(cat["status"], 0)
+        btn_text = f"{cat['emoji']} {cat['name']} ({count})"
+        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"my_ads_cat_{key}")])
+
+    buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_menu")])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    if edit:
+        try:
+            await message.edit_text(text, reply_markup=keyboard)
+        except TelegramAPIError:
+            await message.answer(text, reply_markup=keyboard)
+    else:
+        await message.answer(text, reply_markup=keyboard)
+
+
+async def show_user_ads(
+    message: Message,
+    user_id: int,
+    offset: int = 0,
+    status: str = None,
+    edit: bool = False
+):
     """
     Показать объявления пользователя с пагинацией по 50.
+
+    Args:
+        status: Фильтр по статусу (active, inactive, pending, deleted)
     """
     try:
         # Получаем общее количество объявлений
-        total_count = await AdQueries.get_user_ads_count(user_id)
+        total_count = await AdQueries.get_user_ads_count(user_id, status=status)
 
         # Получаем объявления для текущей страницы
-        ads = await AdQueries.get_user_ads(user_id, limit=ADS_PER_PAGE, offset=offset)
+        ads = await AdQueries.get_user_ads(user_id, status=status, limit=ADS_PER_PAGE, offset=offset)
     except Exception as e:
         logger.error(f"Ошибка получения объявлений: {e}")
         text = "❌ Ошибка загрузки объявлений. Попробуйте позже."
+        back_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 К категориям", callback_data="my_ads")]
+        ])
         if edit:
             try:
-                await message.edit_text(text, reply_markup=get_back_keyboard())
+                await message.edit_text(text, reply_markup=back_kb)
             except TelegramAPIError:
-                await message.answer(text, reply_markup=get_back_keyboard())
+                await message.answer(text, reply_markup=back_kb)
         else:
-            await message.answer(text, reply_markup=get_back_keyboard())
+            await message.answer(text, reply_markup=back_kb)
         return
+
+    # Получаем название категории
+    category_info = ADS_CATEGORIES.get(status, {})
+    category_name = category_info.get("name", "Объявления")
+    category_emoji = category_info.get("emoji", "📋")
 
     if not ads and offset == 0:
         text = (
-            "📋 <b>Ваши объявления</b>\n\n"
-            "У вас пока нет объявлений.\n"
-            "Создайте своё первое объявление!"
+            f"{category_emoji} <b>{category_name}</b>\n\n"
+            f"В этой категории пока нет объявлений."
         )
+
+        back_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📋 К категориям", callback_data="my_ads")]
+        ])
 
         if edit:
             if message.photo:
                 await message.delete()
-                await message.answer(text, reply_markup=get_back_keyboard())
+                await message.answer(text, reply_markup=back_kb)
             else:
                 try:
-                    await message.edit_text(text, reply_markup=get_back_keyboard())
+                    await message.edit_text(text, reply_markup=back_kb)
                 except TelegramAPIError:
-                    await message.answer(text, reply_markup=get_back_keyboard())
+                    await message.answer(text, reply_markup=back_kb)
         else:
-            await message.answer(text, reply_markup=get_back_keyboard())
+            await message.answer(text, reply_markup=back_kb)
         return
 
     # Формируем заголовок с информацией о пагинации
@@ -256,9 +345,9 @@ async def show_user_ads(message: Message, user_id: int, offset: int = 0, edit: b
     end_num = offset + len(ads)
 
     if total_count > ADS_PER_PAGE:
-        text = f"📋 <b>Ваши объявления</b> ({start_num}-{end_num} из {total_count})\n\n"
+        text = f"{category_emoji} <b>{category_name}</b> ({start_num}-{end_num} из {total_count})\n\n"
     else:
-        text = f"📋 <b>Ваши объявления</b> ({total_count})\n\n"
+        text = f"{category_emoji} <b>{category_name}</b> ({total_count})\n\n"
 
     bot_username = settings.BOT_USERNAME
 
@@ -306,7 +395,7 @@ async def show_user_ads(message: Message, user_id: int, offset: int = 0, edit: b
             text += f"   <a href=\"{edit_link}\">✏️ Изменить</a>  <a href=\"{delete_link}\">🗑 Удалить</a>\n\n"
 
     # Клавиатура с пагинацией
-    keyboard = get_my_ads_keyboard(offset, total_count)
+    keyboard = get_my_ads_keyboard(offset, total_count, status=status)
 
     if edit:
         if message.photo:

@@ -211,33 +211,56 @@ class AdQueries:
             return []
     
     @staticmethod
-    async def get_user_ads_count(telegram_id: int) -> int:
+    async def get_user_ads_count(telegram_id: int, status: Optional[str] = None) -> int:
         """
         Получить количество объявлений пользователя (быстрый запрос COUNT).
         Используется для пагинации в "Мои объявления".
-        Включает все видимые пользователю объявления (кроме полностью удалённых).
+
+        Args:
+            telegram_id: ID пользователя
+            status: Фильтр по статусу (None = все видимые)
         """
         try:
             async with get_db_session() as session:
-                stmt = (
-                    select(func.count(Ad.id))
-                    .where(
-                        and_(
-                            Ad.user_id == telegram_id,
-                            Ad.status.in_([
-                                AdStatus.ACTIVE.value,
-                                AdStatus.PENDING.value,
-                                AdStatus.INACTIVE.value,  # Неактивные (срок истёк)
-                                AdStatus.NEEDS_EDIT.value,  # Требует редактирования
-                            ])
-                        )
-                    )
-                )
+                stmt = select(func.count(Ad.id)).where(Ad.user_id == telegram_id)
+
+                if status:
+                    stmt = stmt.where(Ad.status == status)
+                else:
+                    # По умолчанию все видимые пользователю
+                    stmt = stmt.where(Ad.status.in_([
+                        AdStatus.ACTIVE.value,
+                        AdStatus.PENDING.value,
+                        AdStatus.INACTIVE.value,
+                        AdStatus.NEEDS_EDIT.value,
+                    ]))
+
                 result = await session.execute(stmt)
                 return result.scalar() or 0
         except Exception as e:
             logger.error(f"Error counting user ads {telegram_id}: {e}")
             return 0
+
+    @staticmethod
+    async def get_user_ads_counts_by_status(telegram_id: int) -> dict:
+        """
+        Получить количество объявлений по каждому статусу.
+        """
+        try:
+            async with get_db_session() as session:
+                counts = {}
+                for status in [AdStatus.ACTIVE.value, AdStatus.INACTIVE.value,
+                               AdStatus.PENDING.value, AdStatus.DELETED.value]:
+                    stmt = (
+                        select(func.count(Ad.id))
+                        .where(Ad.user_id == telegram_id, Ad.status == status)
+                    )
+                    result = await session.execute(stmt)
+                    counts[status] = result.scalar() or 0
+                return counts
+        except Exception as e:
+            logger.error(f"Error getting ads counts by status: {e}")
+            return {"active": 0, "inactive": 0, "pending": 0, "deleted": 0}
     
     @staticmethod
     async def get_user_ads_count_today(telegram_id: int) -> int:
