@@ -114,6 +114,16 @@ async def cmd_start_with_args(message: Message, command: CommandObject, state: F
         except Exception as e:
             logger.error(f"Ошибка переопубликации объявления: {e}")
 
+    # Обработка полного удаления (из списка удалённых)
+    if args and args.startswith("remove_"):
+        try:
+            ad_id = args.replace("remove_", "")
+            logger.info(f"Запрос полного удаления: ad_id={ad_id}, user={message.from_user.id}")
+            await confirm_remove_ad(message, ad_id)
+            return
+        except Exception as e:
+            logger.error(f"Ошибка полного удаления: {e}")
+
     # Для обычного /start - проверяем дебаунс
     if not _should_process_start(message.from_user.id):
         return
@@ -792,6 +802,99 @@ async def callback_confirm_delete_ad(callback: CallbackQuery):
 
     except Exception as e:
         logger.error(f"Ошибка удаления объявления: {e}")
+        await callback.answer("❌ Ошибка удаления", show_alert=True)
+
+
+async def confirm_remove_ad(message: Message, ad_id: str):
+    """Показать подтверждение полного удаления объявления (из списка удалённых)"""
+    user_id = message.from_user.id
+
+    ad = await AdQueries.get_ad(ad_id)
+
+    if not ad:
+        await message.answer("❌ Объявление не найдено.", reply_markup=get_main_reply_keyboard())
+        return
+
+    if ad.user_id != user_id:
+        await message.answer("❌ Это не ваше объявление.", reply_markup=get_main_reply_keyboard())
+        return
+
+    if ad.status != AdStatus.DELETED.value:
+        await message.answer("❌ Это объявление не в списке удалённых.", reply_markup=get_main_reply_keyboard())
+        return
+
+    ad_title = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Да, удалить навсегда", callback_data=f"ad_remove_confirm_{ad_id}"),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads_cat_deleted")
+        ]
+    ])
+
+    await message.answer(
+        f"🗑 <b>Удалить объявление навсегда?</b>\n\n"
+        f"«{ad_title}»\n\n"
+        f"⚠️ Объявление будет удалено из архива и из вашего списка.\n"
+        f"Восстановить его будет невозможно.",
+        reply_markup=keyboard
+    )
+
+
+@router.callback_query(F.data.startswith("ad_remove_confirm_"))
+async def callback_confirm_remove_ad(callback: CallbackQuery):
+    """Подтверждение полного удаления объявления"""
+    ad_id = callback.data.replace("ad_remove_confirm_", "")
+    user_id = callback.from_user.id
+
+    ad = await AdQueries.get_ad(ad_id)
+
+    if not ad or ad.user_id != user_id:
+        await callback.answer("❌ Объявление не найдено или не ваше", show_alert=True)
+        return
+
+    try:
+        deleted_count = 0
+
+        # Удаляем из архивного канала (если есть)
+        if ad.archive_message_ids:
+            logger.info(f"[REMOVE] Удаляем из архива: {ad.archive_message_ids}")
+            for channel, msg_ids in ad.archive_message_ids.items():
+                if isinstance(msg_ids, int):
+                    msg_ids = [msg_ids]
+                elif not isinstance(msg_ids, list):
+                    msg_ids = [msg_ids]
+
+                for msg_id in msg_ids:
+                    try:
+                        await callback.bot.delete_message(chat_id=channel, message_id=msg_id)
+                        deleted_count += 1
+                    except TelegramAPIError as e:
+                        if "message to delete not found" not in str(e).lower():
+                            logger.warning(f"[REMOVE] Не удалось удалить из архива {channel}/{msg_id}: {e}")
+
+        # Меняем статус на ARCHIVED (не показывается в списках)
+        async with get_db_session() as session:
+            from sqlalchemy import update
+            from datetime import datetime
+            stmt = update(Ad).where(Ad.id == ad.id).values(
+                status=AdStatus.ARCHIVED.value,
+                archive_message_ids={},
+                deleted_at=datetime.utcnow()
+            )
+            await session.execute(stmt)
+            await session.commit()
+
+        logger.info(f"[REMOVE] Объявление {ad_id} полностью удалено (статус ARCHIVED)")
+
+        await callback.answer("✅ Объявление удалено навсегда", show_alert=False)
+
+        # Возвращаемся к списку удалённых
+        from bot.handlers.ad_management import show_user_ads
+        await show_user_ads(callback.message, user_id, offset=0, status="deleted", edit=True)
+
+    except Exception as e:
+        logger.error(f"Ошибка полного удаления: {e}")
         await callback.answer("❌ Ошибка удаления", show_alert=True)
 
 
