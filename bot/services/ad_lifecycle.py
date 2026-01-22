@@ -383,22 +383,27 @@ class AdLifecycleService:
     async def get_ads_for_notification(self, days_before: int) -> List[Ad]:
         """
         Получить объявления для уведомления за N дней до истечения.
+
+        days_before=2: объявления истекающие через 2-3 дня (уведомление на 28-й день)
+        days_before=1: объявления истекающие через 1-2 дня (уведомление на 29-й день)
         """
         config = AD_LIFECYCLE_CONFIG["notifications"]
         if not config.get("enabled", True):
             return []
 
         now = datetime.utcnow()
-        target_date = now + timedelta(days=days_before)
 
-        # Ищем объявления, которые истекают в указанный день
-        # и которым ещё не отправлено это уведомление
+        # Ищем объявления в конкретном окне времени
+        # Например, days_before=2: expires_at между now+2d и now+3d
+        window_start = now + timedelta(days=days_before)
+        window_end = now + timedelta(days=days_before + 1)
+
         stmt = select(Ad).where(
             and_(
                 Ad.status == AdStatus.ACTIVE.value,
                 Ad.expires_at != None,
-                Ad.expires_at > now,
-                Ad.expires_at <= target_date + timedelta(hours=24)
+                Ad.expires_at > window_start,
+                Ad.expires_at <= window_end
             )
         )
 
