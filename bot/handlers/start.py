@@ -124,6 +124,16 @@ async def cmd_start_with_args(message: Message, command: CommandObject, state: F
         except Exception as e:
             logger.error(f"Ошибка полного удаления: {e}")
 
+    # Обработка просмотра своего объявления (для неактивных, на модерации, удалённых)
+    if args and args.startswith("view_"):
+        try:
+            ad_id = args.replace("view_", "")
+            logger.info(f"Просмотр своего объявления: ad_id={ad_id}, user={message.from_user.id}")
+            await show_own_ad_preview(message, ad_id)
+            return
+        except Exception as e:
+            logger.error(f"Ошибка просмотра объявления: {e}")
+
     # Для обычного /start - проверяем дебаунс
     if not _should_process_start(message.from_user.id):
         return
@@ -827,15 +837,15 @@ async def confirm_remove_ad(message: Message, ad_id: str):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Да, удалить навсегда", callback_data=f"ad_remove_confirm_{ad_id}"),
+            InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"ad_remove_confirm_{ad_id}"),
             InlineKeyboardButton(text="❌ Отмена", callback_data="my_ads_cat_deleted")
         ]
     ])
 
     await message.answer(
-        f"🗑 <b>Удалить объявление навсегда?</b>\n\n"
+        f"🗑 <b>Удалить объявление?</b>\n\n"
         f"«{ad_title}»\n\n"
-        f"⚠️ Объявление будет удалено из архива и из вашего списка.\n"
+        f"⚠️ Объявление будет удалено из вашего списка.\n"
         f"Восстановить его будет невозможно.",
         reply_markup=keyboard
     )
@@ -887,7 +897,7 @@ async def callback_confirm_remove_ad(callback: CallbackQuery):
 
         logger.info(f"[REMOVE] Объявление {ad_id} полностью удалено (статус ARCHIVED)")
 
-        await callback.answer("✅ Объявление удалено навсегда", show_alert=False)
+        await callback.answer("✅ Объявление удалено", show_alert=False)
 
         # Возвращаемся к списку удалённых
         from bot.handlers.ad_management import show_user_ads
@@ -896,6 +906,128 @@ async def callback_confirm_remove_ad(callback: CallbackQuery):
     except Exception as e:
         logger.error(f"Ошибка полного удаления: {e}")
         await callback.answer("❌ Ошибка удаления", show_alert=True)
+
+
+async def show_own_ad_preview(message: Message, ad_id: str):
+    """Показать превью объявления владельцу (для неактивных, на модерации, удалённых)"""
+    from aiogram.types import InputMediaPhoto
+    from shared.regions_config import (
+        REGIONS, CITIES, CATEGORIES, SUBCATEGORIES,
+        DEAL_TYPES, CONDITION_TYPES, DELIVERY_TYPES
+    )
+    from bot.config import settings
+
+    user_id = message.from_user.id
+
+    ad = await AdQueries.get_ad(ad_id)
+
+    if not ad:
+        await message.answer("❌ Объявление не найдено.", reply_markup=get_main_reply_keyboard())
+        return
+
+    if ad.user_id != user_id:
+        await message.answer("❌ Это не ваше объявление.", reply_markup=get_main_reply_keyboard())
+        return
+
+    # Получаем данные
+    region_name = REGIONS.get(ad.region, ad.region or "")
+    category_name = CATEGORIES.get(ad.category, ad.category or "")
+
+    pf = ad.premium_features or {}
+    subcategory = pf.get('subcategory', '')
+    subcategory_name = SUBCATEGORIES.get(ad.category, {}).get(subcategory, subcategory)
+    condition = pf.get('condition', '')
+    condition_name = CONDITION_TYPES.get(condition, '')
+    delivery = pf.get('delivery', '')
+    delivery_name = DELIVERY_TYPES.get(delivery, '')
+    city = pf.get('city', '')
+    city_name = CITIES.get(ad.region, {}).get(city, city)
+
+    deal_type_name = DEAL_TYPES.get(ad.ad_type, ad.ad_type or "")
+
+    # Цена
+    if ad.price:
+        price_text = f"{int(ad.price):,} ₽".replace(",", " ")
+    else:
+        price_text = pf.get('price_text', 'Договорная')
+
+    # Статус
+    status_text = {
+        "active": "✅ Активно",
+        "inactive": "💤 Неактивно",
+        "pending": "⏳ На модерации",
+        "deleted": "🗑 Удалено",
+        "rejected": "❌ Отклонено"
+    }.get(ad.status, ad.status)
+
+    bot_username = settings.BOT_USERNAME
+
+    text = f"""📢 <b>{ad.title}</b>
+
+📊 <b>Статус:</b> {status_text}
+
+📍 {region_name}{f' • {city_name}' if city_name else ''}
+📂 {category_name}{f' • {subcategory_name}' if subcategory_name else ''}
+🏷 {deal_type_name}{f' • {condition_name}' if condition_name else ''}
+
+{ad.description or ''}
+
+💰 <b>Цена:</b> {price_text}
+{f'🚚 <b>Доставка:</b> {delivery_name}' if delivery_name else ''}
+"""
+
+    # Кнопки зависят от статуса
+    buttons = []
+
+    if ad.status == "inactive":
+        buttons.append([InlineKeyboardButton(text="✏️ Изменить", callback_data=f"edit_title_{ad_id}")])
+        buttons.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"ad_del_confirm_{ad_id}")])
+        buttons.append([InlineKeyboardButton(text="📋 К категориям", callback_data="my_ads")])
+    elif ad.status == "pending":
+        buttons.append([InlineKeyboardButton(text="✏️ Изменить", callback_data=f"edit_title_{ad_id}")])
+        buttons.append([InlineKeyboardButton(text="🔄 Опубликовать", callback_data=f"republish_confirm_{ad_id}")])
+        buttons.append([InlineKeyboardButton(text="📋 К категориям", callback_data="my_ads")])
+    elif ad.status == "deleted":
+        buttons.append([InlineKeyboardButton(text="🔄 Опубликовать", callback_data=f"republish_confirm_{ad_id}")])
+        buttons.append([InlineKeyboardButton(text="🗑 Удалить", callback_data=f"ad_remove_confirm_{ad_id}")])
+        buttons.append([InlineKeyboardButton(text="📋 К категориям", callback_data="my_ads")])
+    else:
+        buttons.append([InlineKeyboardButton(text="📋 К категориям", callback_data="my_ads")])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    photos = ad.photos or []
+
+    if photos:
+        if len(photos) == 1:
+            await message.answer_photo(
+                photo=photos[0],
+                caption=text,
+                reply_markup=keyboard
+            )
+        else:
+            # Медиагруппа
+            media_group = [InputMediaPhoto(media=photos[0], caption=text)]
+            for photo in photos[1:10]:
+                media_group.append(InputMediaPhoto(media=photo))
+
+            await message.answer_media_group(media=media_group)
+            await message.answer(
+                "👆 Объявление выше",
+                reply_markup=keyboard
+            )
+    elif ad.video:
+        await message.answer_video(
+            video=ad.video,
+            caption=text,
+            reply_markup=keyboard
+        )
+    else:
+        await message.answer(
+            text,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
 
 
 async def show_edit_menu(message: Message, ad_id: str):

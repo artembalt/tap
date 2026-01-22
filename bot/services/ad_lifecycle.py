@@ -3,13 +3,12 @@
 Сервис управления жизненным циклом объявлений.
 
 Функции:
-- Уведомления об истечении срока (28, 29, 30 дни)
+- Уведомления об истечении срока (за 2 дня, 1 день, 1 час)
 - Продление объявления (кнопка "Продлить")
 - Снятие с публикации (кнопка "Снять" или игнор)
-- Перемещение в архивный канал
-- Переопубликация из архива
+- Переопубликация неактивных объявлений
 - Автоподнятие объявлений
-- Полная архивация через 90 дней неактивности
+- Перемещение неактивных в удалённые через 30 дней
 """
 
 import logging
@@ -92,59 +91,36 @@ class AdLifecycleService:
             return False, f"Ошибка: {str(e)}"
 
     # =========================================================================
-    # ПЕРЕМЕЩЕНИЕ В АРХИВНЫЙ КАНАЛ
+    # СНЯТИЕ С ПУБЛИКАЦИИ
     # =========================================================================
 
     async def move_to_archive(self, ad: Ad) -> bool:
         """
-        Переместить объявление в архивный канал.
+        Снять объявление с публикации.
 
         Вызывается когда:
         - Срок публикации истёк и пользователь не продлил
         - Пользователь нажал "Снять"
 
-        1. Удаляет из родного канала
-        2. Публикует в архивный канал
-        3. Обновляет статус на INACTIVE
+        1. Удаляет из каналов
+        2. Обновляет статус на INACTIVE
+
+        Данные объявления остаются в БД, медиа - на серверах Telegram.
         """
         logger.info(f"[LIFECYCLE] move_to_archive: ad_id={ad.id}")
 
-        region_config = RegionConfig.get_region(ad.region)
-        if not region_config:
-            logger.error(f"[LIFECYCLE] Регион не найден: {ad.region}")
-            return False
-
-        archive_channel = region_config.archive_channel
-        if not archive_channel:
-            logger.warning(f"[LIFECYCLE] Архивный канал не настроен для {ad.region}")
-            # Просто меняем статус без перемещения
-            ad.status = AdStatus.INACTIVE.value
-            ad.notifications_sent = {}
-            return True
-
         try:
-            # 1. Удаляем из родных каналов
+            # 1. Удаляем из каналов
             await self._delete_from_channels(ad)
 
-            # 2. Публикуем в архивный канал
-            archive_message_ids = await self._publish_to_archive(ad, archive_channel)
+            # 2. Меняем статус на INACTIVE
+            ad.status = AdStatus.INACTIVE.value
+            ad.channel_message_ids = {}
+            ad.archived_to_channel_at = datetime.utcnow()
+            ad.notifications_sent = {}
 
-            if archive_message_ids:
-                ad.status = AdStatus.INACTIVE.value
-                ad.archive_message_ids = {archive_channel: archive_message_ids}
-                ad.archived_to_channel_at = datetime.utcnow()
-                ad.channel_message_ids = {}
-                ad.notifications_sent = {}
-
-                logger.info(f"[LIFECYCLE] Объявление {ad.id} перемещено в архив")
-                return True
-            else:
-                # Даже если не удалось опубликовать в архив, меняем статус
-                ad.status = AdStatus.INACTIVE.value
-                ad.channel_message_ids = {}
-                ad.notifications_sent = {}
-                logger.warning(f"[LIFECYCLE] Объявление {ad.id} снято без публикации в архив")
-                return True
+            logger.info(f"[LIFECYCLE] Объявление {ad.id} снято с публикации")
+            return True
 
         except Exception as e:
             logger.error(f"[LIFECYCLE] Ошибка move_to_archive: {e}")
@@ -175,72 +151,9 @@ class AdLifecycleService:
             logger.warning(f"[LIFECYCLE] Ошибка удаления сообщения: {e}")
             return False
 
-    async def _publish_to_archive(self, ad: Ad, archive_channel: str) -> List[int]:
-        """Опубликовать объявление в архивный канал"""
-        text = self._format_archive_text(ad)
-        photos = ad.photos or []
-        message_ids = []
-
-        try:
-            if photos:
-                if len(photos) == 1:
-                    msg = await self.bot.send_photo(
-                        chat_id=archive_channel,
-                        photo=photos[0],
-                        caption=text,
-                        parse_mode='HTML'
-                    )
-                    message_ids = [msg.message_id]
-                else:
-                    media = [InputMediaPhoto(media=photos[0], caption=text, parse_mode='HTML')]
-                    for p in photos[1:10]:
-                        media.append(InputMediaPhoto(media=p))
-                    msgs = await self.bot.send_media_group(chat_id=archive_channel, media=media)
-                    message_ids = [m.message_id for m in msgs]
-            elif ad.video:
-                msg = await self.bot.send_video(
-                    chat_id=archive_channel,
-                    video=ad.video,
-                    caption=text,
-                    parse_mode='HTML'
-                )
-                message_ids = [msg.message_id]
-            else:
-                msg = await self.bot.send_message(
-                    chat_id=archive_channel,
-                    text=text,
-                    parse_mode='HTML',
-                    disable_web_page_preview=True
-                )
-                message_ids = [msg.message_id]
-
-            return message_ids
-
-        except Exception as e:
-            logger.error(f"[LIFECYCLE] Ошибка публикации в архив: {e}")
-            return []
-
-    def _format_archive_text(self, ad: Ad) -> str:
-        """Форматировать текст для архивного канала"""
-        region_name = REGIONS.get(ad.region, ad.region)
-        category_name = CATEGORIES.get(ad.category, ad.category)
-
-        price_text = ""
-        if ad.price:
-            price_text = f"\n💰 {ad.price:,.0f} {ad.currency or 'RUB'}"
-
-        return (
-            f"📦 <b>АРХИВ</b> | ID: {ad.id}\n"
-            f"━━━━━━━━━━━━━━━━━\n"
-            f"📍 {region_name} | {category_name}\n"
-            f"👤 Владелец: {ad.user_id}\n"
-            f"━━━━━━━━━━━━━━━━━\n\n"
-            f"<b>{ad.title}</b>{price_text}\n\n"
-            f"{ad.description[:500]}{'...' if len(ad.description) > 500 else ''}"
-        )
 
     # =========================================================================
-    # ПЕРЕОПУБЛИКАЦИЯ ИЗ АРХИВА
+    # ПЕРЕОПУБЛИКАЦИЯ НЕАКТИВНЫХ ОБЪЯВЛЕНИЙ
     # =========================================================================
 
     async def republish_from_archive(
@@ -249,12 +162,14 @@ class AdLifecycleService:
         user: User
     ) -> Tuple[bool, str, Optional[Dict[str, List[int]]]]:
         """
-        Переопубликовать объявление из архива.
+        Переопубликовать неактивное объявление.
+
+        Данные берутся из БД, медиа по file_id с серверов Telegram.
         """
         logger.info(f"[LIFECYCLE] republish_from_archive: ad_id={ad.id}")
 
-        if ad.status != AdStatus.INACTIVE.value:
-            return False, "Объявление не в архиве", None
+        if ad.status not in [AdStatus.INACTIVE.value, AdStatus.DELETED.value]:
+            return False, "Объявление не подходит для переопубликации", None
 
         region_config = RegionConfig.get_region(ad.region)
         if not region_config or not region_config.is_configured():
@@ -267,22 +182,12 @@ class AdLifecycleService:
             if not channel_ids:
                 return False, "Не удалось опубликовать в каналы", None
 
-            # 2. Удаляем из архивного канала
-            if ad.archive_message_ids:
-                for channel_id, message_ids in ad.archive_message_ids.items():
-                    if isinstance(message_ids, list):
-                        for msg_id in message_ids:
-                            await self._safe_delete_message(channel_id, msg_id)
-                    else:
-                        await self._safe_delete_message(channel_id, message_ids)
-
-            # 3. Обновляем объявление
+            # 2. Обновляем объявление
             account_limits = get_account_limits(user.account_type or "free")
             duration_days = account_limits.get("ad_duration_days", 30)
 
             ad.status = AdStatus.ACTIVE.value
             ad.channel_message_ids = channel_ids
-            ad.archive_message_ids = {}
             ad.archived_to_channel_at = None
             ad.published_at = datetime.utcnow()
             ad.expires_at = datetime.utcnow() + timedelta(days=duration_days)
@@ -479,9 +384,9 @@ class AdLifecycleService:
                 f"{urgency} <b>Объявление скоро будет снято!</b>\n\n"
                 f"📋 {title_link}\n"
                 f"⏳ Осталось: {time_left}\n\n"
-                f"После истечения срока объявление будет удалено из канала "
-                f"и перемещено в архив. Комментарии пользователей к объявлению будут удалены.\n\n"
-                f"Объявление можно восстановить из архива в любое время."
+                f"После истечения срока объявление будет удалено из канала.\n"
+                f"Комментарии пользователей к объявлению будут удалены.\n\n"
+                f"Объявление можно будет переопубликовать в разделе «Мои объявления»."
             )
 
             # Кнопки
@@ -585,16 +490,18 @@ class AdLifecycleService:
         return boosted_count
 
     # =========================================================================
-    # ПОЛНАЯ АРХИВАЦИЯ (90 ДНЕЙ)
+    # ПЕРЕМЕЩЕНИЕ НЕАКТИВНЫХ В УДАЛЁННЫЕ (30 ДНЕЙ)
     # =========================================================================
 
-    async def archive_old_inactive(self) -> int:
+    async def move_inactive_to_deleted(self) -> int:
         """
-        Переместить старые неактивные объявления в таблицу archived_ads.
+        Переместить неактивные объявления старше 30 дней в удалённые.
+
+        Неактивные объявления хранятся 30 дней, потом автоматически
+        перемещаются в статус DELETED.
         """
-        config = AD_LIFECYCLE_CONFIG["archive"]
-        retention_days = config.get("inactive_retention_days", 90)
-        batch_size = config.get("cleanup_batch_size", 100)
+        retention_days = 30
+        batch_size = 100
 
         cutoff_date = datetime.utcnow() - timedelta(days=retention_days)
 
@@ -609,61 +516,24 @@ class AdLifecycleService:
         result = await self.session.execute(stmt)
         ads = result.scalars().all()
 
-        archived_count = 0
+        moved_count = 0
         for ad in ads:
             try:
-                # 1. Удаляем из архивного канала
-                if ad.archive_message_ids:
-                    for channel_id, message_ids in ad.archive_message_ids.items():
-                        if isinstance(message_ids, list):
-                            for msg_id in message_ids:
-                                await self._safe_delete_message(channel_id, msg_id)
-                        else:
-                            await self._safe_delete_message(channel_id, message_ids)
-
-                # 2. Копируем в archived_ads
-                archived_ad = ArchivedAd(
-                    id=ad.id,
-                    user_id=ad.user_id,
-                    title=ad.title,
-                    description=ad.description,
-                    price=ad.price,
-                    currency=ad.currency,
-                    ad_type=ad.ad_type,
-                    region=ad.region,
-                    city=ad.city,
-                    category=ad.category,
-                    subcategory=ad.subcategory,
-                    photos=ad.photos,
-                    video=ad.video,
-                    hashtags=ad.hashtags,
-                    views_count=ad.views_count,
-                    favorites_count=ad.favorites_count,
-                    contacts_count=ad.contacts_count,
-                    created_at=ad.created_at,
-                    published_at=ad.published_at,
-                    deleted_at=ad.deleted_at,
-                    archived_at=datetime.utcnow(),
-                    archive_reason="inactive_expired"
-                )
-                self.session.add(archived_ad)
-
-                # 3. Меняем статус на DELETED
                 ad.status = AdStatus.DELETED.value
                 ad.deleted_at = datetime.utcnow()
-                archived_count += 1
+                moved_count += 1
 
-                logger.info(f"[LIFECYCLE] Объявление {ad.id} полностью заархивировано")
+                logger.info(f"[LIFECYCLE] Объявление {ad.id} перемещено в удалённые (30 дней неактивности)")
 
             except Exception as e:
-                logger.error(f"[LIFECYCLE] Ошибка архивации {ad.id}: {e}")
+                logger.error(f"[LIFECYCLE] Ошибка перемещения {ad.id}: {e}")
                 continue
 
-        if archived_count > 0:
+        if moved_count > 0:
             await self.session.commit()
 
-        logger.info(f"[LIFECYCLE] Заархивировано: {archived_count}")
-        return archived_count
+        logger.info(f"[LIFECYCLE] Перемещено в удалённые: {moved_count}")
+        return moved_count
 
     # =========================================================================
     # ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ

@@ -369,35 +369,47 @@ async def show_user_ads(
             pf = ad.premium_features or {}
             price_text = pf.get('price_text', 'Договорная')
 
-        # Получаем ссылку на объявление в канале
-        channel_link = get_channel_link(ad)
-
         title_display = ad.title[:40] + "..." if len(ad.title) > 40 else ad.title
-
-        # Заголовок
-        if channel_link:
-            text += f"{i}. {status_emoji} <a href=\"{channel_link}\">{title_display}</a>\n"
-        else:
-            text += f"{i}. {status_emoji} {title_display}\n"
-
-        # Цена
-        text += f"   ₽ {price_text}\n"
 
         # Ссылки на действия (deep links)
         edit_link = f"https://t.me/{bot_username}?start=edit_{ad.id}"
         delete_link = f"https://t.me/{bot_username}?start=del_{ad.id}"
         republish_link = f"https://t.me/{bot_username}?start=republish_{ad.id}"
         remove_link = f"https://t.me/{bot_username}?start=remove_{ad.id}"
+        view_link = f"https://t.me/{bot_username}?start=view_{ad.id}"
+
+        # Заголовок - зависит от статуса
+        if ad.status == "active":
+            # Активные: ссылка на канал
+            channel_link = get_channel_link(ad)
+            if channel_link:
+                text += f"{i}. {status_emoji} <a href=\"{channel_link}\">{title_display}</a>\n"
+            else:
+                text += f"{i}. {status_emoji} {title_display}\n"
+        elif ad.status in ["inactive", "pending", "deleted"]:
+            # Неактивные, На модерации, Удалённые: ссылка на просмотр в боте
+            text += f"{i}. {status_emoji} <a href=\"{view_link}\">{title_display}</a>\n"
+        else:
+            text += f"{i}. {status_emoji} {title_display}\n"
+
+        # Цена
+        text += f"   ₽ {price_text}\n"
 
         # Разные кнопки в зависимости от статуса
-        if ad.status == "inactive":
-            # Неактивные: Опубликовать, Изменить, Удалить
-            text += f"   <a href=\"{republish_link}\">🔄 Опубликовать</a>  <a href=\"{edit_link}\">✏️ Изменить</a>  <a href=\"{delete_link}\">🗑 Удалить</a>\n\n"
+        if ad.status == "active":
+            # Активные: Изменить, Удалить
+            text += f"   <a href=\"{edit_link}\">✏️ Изменить</a>  <a href=\"{delete_link}\">🗑 Удалить</a>\n\n"
+        elif ad.status == "inactive":
+            # Неактивные: Изменить, Удалить
+            text += f"   <a href=\"{edit_link}\">✏️ Изменить</a>  <a href=\"{delete_link}\">🗑 Удалить</a>\n\n"
+        elif ad.status == "pending":
+            # На модерации: Изменить, Опубликовать
+            text += f"   <a href=\"{edit_link}\">✏️ Изменить</a>  <a href=\"{republish_link}\">🔄 Опубликовать</a>\n\n"
         elif ad.status == "deleted":
-            # Удалённые: Опубликовать, Удалить навсегда
-            text += f"   <a href=\"{republish_link}\">🔄 Опубликовать</a>  <a href=\"{remove_link}\">🗑 Удалить навсегда</a>\n\n"
+            # Удалённые: Опубликовать, Удалить
+            text += f"   <a href=\"{republish_link}\">🔄 Опубликовать</a>  <a href=\"{remove_link}\">🗑 Удалить</a>\n\n"
         else:
-            # Активные и другие: Изменить, Удалить
+            # Прочие: Изменить, Удалить
             text += f"   <a href=\"{edit_link}\">✏️ Изменить</a>  <a href=\"{delete_link}\">🗑 Удалить</a>\n\n"
 
     # Клавиатура с пагинацией
@@ -849,8 +861,7 @@ async def callback_archive_ad(callback: CallbackQuery):
                 await callback.message.edit_text(
                     f"✅ <b>Объявление снято с публикации</b>\n\n"
                     f"📋 {ad.title}\n\n"
-                    f"Объявление перемещено в архив.\n"
-                    f"Вы можете восстановить его в разделе «Мои объявления»."
+                    f"Вы можете переопубликовать его в разделе «Мои объявления» → «Неактивные»."
                 )
             else:
                 await callback.message.edit_text("❌ Ошибка снятия объявления")
