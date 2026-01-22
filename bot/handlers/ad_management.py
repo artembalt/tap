@@ -137,7 +137,7 @@ async def update_ad_in_channels(ad_id: str, bot: Bot) -> tuple[int, int]:
         return 0, 1
 
 # Количество объявлений на странице
-ADS_PER_PAGE = 50
+ADS_PER_PAGE = 25
 
 
 class EditAdStates(StatesGroup):

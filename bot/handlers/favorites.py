@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 router = Router(name='favorites')
 
 # Количество объявлений на странице
-FAVORITES_PER_PAGE = 50
+FAVORITES_PER_PAGE = 25
 
 
 def get_favorites_keyboard(offset: int, total: int) -> InlineKeyboardMarkup:

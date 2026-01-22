@@ -175,7 +175,7 @@ async def _send_welcome(message: Message):
 
 
 # Количество объявлений на странице в профиле
-PROFILE_ADS_PER_PAGE = 50
+PROFILE_ADS_PER_PAGE = 25
 
 
 def get_seller_profile_keyboard(seller_id: int, offset: int, total: int) -> InlineKeyboardMarkup:
